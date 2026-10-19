@@ -2,7 +2,7 @@
   "name": "ci-dash",
   "version": "0.1.0",
   "private": true,
-  "description": "Run and watch GitHub Actions workflows from a Herdr pane",
+  "description": "GitHub Actions in a Herdr pane: dispatch workflows with ref and inputs, watch live.",
   "license": "MIT",
   "type": "commonjs",
   "engines": {
