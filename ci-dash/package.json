@@ -1,0 +1,19 @@
+{
+  "name": "ci-dash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run and watch GitHub Actions workflows from a Herdr pane",
+  "license": "MIT",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test",
+    "diagnose": "node src/dashboard.js --diagnose",
+    "start": "node src/dashboard.js"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
+}

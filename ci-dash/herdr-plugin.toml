@@ -1,0 +1,56 @@
+id = "ci-dash"
+name = "CI Dash"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Run and watch GitHub Actions workflows for the current repository"
+platforms = ["linux", "macos", "windows"]
+
+[[build]]
+command = ["npm", "ci", "--omit=dev"]
+
+[[startup]]
+command = ["node", "src/setup-keys.js", "--notify"]
+
+[[actions]]
+id = "open"
+title = "Open the CI Dash panel"
+contexts = ["workspace"]
+command = ["node", "src/open.js", "panel"]
+
+[[actions]]
+id = "tab"
+title = "Open CI Dash in a new tab"
+contexts = ["workspace"]
+command = ["node", "src/open.js", "tab"]
+
+[[actions]]
+id = "quick"
+title = "Quick-run a GitHub Actions workflow"
+contexts = ["workspace"]
+command = ["node", "src/open.js", "popup"]
+
+[[actions]]
+id = "setup-keys"
+title = "Add CI Dash keybindings"
+contexts = ["workspace"]
+command = ["node", "src/setup-keys.js", "--force", "--notify"]
+
+[[panes]]
+id = "dashboard"
+title = "GitHub Actions"
+placement = "tab"
+command = ["node", "src/dashboard.js"]
+
+[[panes]]
+id = "panel"
+title = "GitHub Actions"
+placement = "split"
+command = ["node", "src/dashboard.js", "--quick"]
+
+[[panes]]
+id = "quick"
+title = "Run workflow"
+placement = "popup"
+width = "90%"
+height = "85%"
+command = ["node", "src/dashboard.js", "--quick"]
