@@ -297,3 +297,46 @@ test('run screen shows a short link button instead of the raw URL', () => {
   }
 });
 
+function appOnRun(status) {
+  const app = new App({});
+  app.tui = { columns: 80, rows: 24, draw() {} };
+  app.screen = 'run';
+  app.watch = {
+    runId: 123,
+    run: { status, conclusion: status === 'completed' ? 'success' : null },
+    jobs: [],
+    scroll: 0,
+    scrollMax: 0,
+    finished: status === 'completed',
+  };
+  return app;
+}
+
+test('Esc returns to the workflow list once the run completes', () => {
+  const app = appOnRun('completed');
+
+  app.keyRun({ type: 'escape' });
+
+  assert.equal(app.screen, 'workflows');
+  assert.equal(app.watch, null);
+});
+
+test('Esc keeps watching while the run is still in progress', () => {
+  const app = appOnRun('in_progress');
+
+  app.keyRun({ type: 'escape' });
+
+  assert.equal(app.screen, 'run');
+  assert.ok(app.watch);
+  assert.match(app.message, /still in progress/);
+});
+
+test('run footer labels b as a new run and offers Esc only after completion', () => {
+  const running = appOnRun('in_progress');
+  assert.ok(running.footerPairs().some(([key, label]) => key === 'b' && label === 'new run'));
+  assert.ok(!running.footerPairs().some(([key]) => key === 'Esc'));
+
+  const done = appOnRun('completed');
+  assert.ok(done.footerPairs().some(([key, label]) => key === 'Esc' && label === 'back'));
+});
+

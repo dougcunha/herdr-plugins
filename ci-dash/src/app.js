@@ -1227,10 +1227,16 @@ class App {
       this.pollWatch();
       return;
     }
-    if (
-      event.type === 'char' &&
-      event.ch === 'b'
-    ) {
+    if (event.type === 'escape') {
+      if (watch.run?.status === 'completed') {
+        this.leaveRun();
+      } else {
+        this.message = 'Run still in progress: b starts another workflow, q closes.';
+        this.render();
+      }
+      return;
+    }
+    if (event.type === 'char' && event.ch === 'b') {
       this.leaveRun();
       return;
     }
@@ -1438,16 +1444,19 @@ class App {
           ['Enter', 'dispatch'],
           ['Esc', 'back'],
         ];
-      case 'run':
-        return [
+      case 'run': {
+        const pairs = [
           [ui.icon('updown'), 'scroll'],
           ['Enter', 'open'],
           ['c', 'cancel'],
           ['R', 'rerun'],
           ['r', 'refresh'],
-          ['b', 'new'],
-          ['q', 'close'],
+          ['b', 'new run'],
         ];
+        if (this.watch?.run?.status === 'completed') pairs.push(['Esc', 'back']);
+        pairs.push(['q', 'close']);
+        return pairs;
+      }
       case 'error':
         return [
           ['r', 'retry'],

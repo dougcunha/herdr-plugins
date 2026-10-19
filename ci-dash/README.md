@@ -144,8 +144,9 @@ The input types supported by the GitHub API are handled as follows:
 | `o`              | Open the run in the browser (same as `Enter` there). |
 | `c`              | Cancel the run.                                     |
 | `R`              | Rerun the run with the same inputs.                 |
-| `b`              | Go back (or return to the workflow list from a run). |
-| `q` / `Esc`      | Quit the panel (or go back on input screens).       |
+| `b`              | Go back, or start another workflow from the run screen. |
+| `q`              | Quit the panel.                                     |
+| `Esc`            | Go back on input screens; on the run screen, back once the run completes. |
 | `Ctrl+C`         | Quit.                                               |
 
 ## Configuration
