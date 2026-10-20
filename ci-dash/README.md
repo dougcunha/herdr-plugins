@@ -82,26 +82,50 @@ plugin is linked:
 | `prefix+alt+g`  | `ci-dash.open` | Panel split to the left of the focused pane. |
 | `prefix+alt+q`  | `ci-dash.quick`| Transient popup.                             |
 
-Herdr's built-in sidebar (workspaces, tabs and agents) is part of the UI and
-cannot be extended by plugins. The closest a plugin can get is a split pane:
-`ci-dash.open` splits the focused pane, swaps the dashboard to the left edge,
-and shrinks it so it behaves like a side panel. It falls back to a tab when
-there is no pane to split. Use `ci-dash.tab` when you want a full tab instead.
+## Keybindings
 
-The plugin appends a marked block to `config.toml`, choosing the first free
-combinations if those keys are already bound. To add them immediately instead
-of waiting for the next server start:
+CI Dash writes the keybindings during `install`, and on the first Herdr server
+start after the plugin is linked manually. To write them immediately after a
+manual link:
 
 ```sh
 herdr plugin action invoke ci-dash.setup-keys
 ```
 
-The block is delimited by `# ci-dash:begin` and `# ci-dash:end`. Remove it to
-disable the shortcuts; CI Dash will not add it again unless you run the
-`setup-keys` action. A one-time backup is written next to the config as
-`config.toml.ci-dash.bak`. Set `CI_DASH_NO_NOTIFY=1` to suppress the
-confirmation notification. If your terminal or tmux intercepts Alt
-combinations, change the two keys inside the block.
+The managed block binds the defaults shown above and can be edited directly.
+Change the `key = "..."` lines to use different combinations:
+
+```toml
+# ci-dash:begin (managed by the CI Dash plugin; remove this block to disable)
+[[keys.command]]
+key = "prefix+alt+g"
+type = "plugin_action"
+command = "ci-dash.open"
+description = "Open the CI Dash panel"
+
+[[keys.command]]
+key = "prefix+alt+q"
+type = "plugin_action"
+command = "ci-dash.quick"
+description = "Quick-run a GitHub Actions workflow"
+# ci-dash:end
+```
+
+Run `herdr --help` and use the `Config:` path to find the file. After editing,
+validate and reload it without restarting Herdr:
+
+```sh
+herdr config check
+herdr server reload-config
+```
+
+When the defaults are already bound, setup tries `prefix+alt+o`,
+`prefix+shift+o`, and `prefix+ctrl+alt+g` for the panel, and `prefix+alt+w`,
+`prefix+shift+q`, and `prefix+ctrl+alt+q` for the popup. If none is free, edit
+the block manually. Remove the block to disable the shortcuts; CI Dash will
+not add it again unless you run the `setup-keys` action. A one-time backup is
+written next to the config as `config.toml.ci-dash.bak`. Set
+`CI_DASH_NO_NOTIFY=1` to suppress the confirmation notification.
 
 Four actions are available:
 
@@ -111,6 +135,12 @@ Four actions are available:
 | `ci-dash.tab`         | New tab.                       | Opens the dashboard in a full tab.                      |
 | `ci-dash.quick`       | Popup.                         | Opens a transient popup, falling back to a tab if the Herdr build does not support popups. |
 | `ci-dash.setup-keys`  | —                              | Adds the keybindings to `config.toml` again.            |
+
+Herdr's built-in sidebar (workspaces, tabs and agents) is part of the UI and
+cannot be extended by plugins. The closest a plugin can get is a split pane:
+`ci-dash.open` splits the focused pane, swaps the dashboard to the left edge,
+and shrinks it so it behaves like a side panel. It falls back to a tab when
+there is no pane to split. Use `ci-dash.tab` when you want a full tab instead.
 
 The pane opens in the workspace directory (or the focused pane's working
 directory), not in the plugin directory. The panel can be resized with the
