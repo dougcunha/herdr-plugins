@@ -41,7 +41,7 @@ existing GitHub CLI session is reused.
 With Bun:
 
 ```sh
-bunx @dougcunha/ci-dash install
+bunx @dougcunha/ci-dash@latest install
 ```
 
 The installer copies the plugin to a stable per-user directory, installs its
@@ -50,7 +50,15 @@ Node.js 20 or newer, the Herdr CLI, and `gh`. Use `--no-keys` to skip the
 keybindings, or `--dir <path>` to choose another install directory:
 
 ```sh
-bunx @dougcunha/ci-dash install --no-keys --dir ~/.local/share/herdr/plugins/ci-dash
+bunx @dougcunha/ci-dash@latest install --no-keys --dir ~/.local/share/herdr/plugins/ci-dash
+```
+
+To update an existing installation, use `@latest` from outside the plugin
+directory. Inside the installed directory, `bunx` resolves the local copy
+instead of the registry, and an unpinned `bunx` may reuse a cached version:
+
+```sh
+bunx @dougcunha/ci-dash@latest install
 ```
 
 From a checkout:
@@ -111,7 +119,7 @@ normal Herdr pane resize keys.
 ## Uninstall
 
 ```sh
-bunx @dougcunha/ci-dash uninstall
+bunx @dougcunha/ci-dash@latest uninstall
 ```
 
 The uninstaller unlinks CI Dash from Herdr, removes the installed plugin files,
