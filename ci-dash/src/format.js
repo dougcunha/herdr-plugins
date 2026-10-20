@@ -329,6 +329,17 @@ function fmtBytes(bytes) {
   return `${rounded} ${units[unit]}`;
 }
 
+function fmtDateTime(value) {
+  const time =
+    typeof value === 'number' ? value : Date.parse(value || '');
+  if (!Number.isFinite(time)) return '';
+  const date = new Date(time);
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+}
+
 function durationBetween(start, end) {
   const from = Date.parse(start || '');
   const to = Date.parse(end || '');
@@ -398,6 +409,7 @@ module.exports = {
   wrapText,
   fmtDuration,
   fmtBytes,
+  fmtDateTime,
   durationBetween,
   shortSha,
   statusColor,

@@ -113,7 +113,6 @@ test('renders artifacts in the poll that completes the run', async () => {
     artifacts: [],
     artifactsLoaded: false,
     artifactsError: null,
-    downloads: new Set(),
     tick: 0,
     notified: false,
     finished: false,
@@ -139,8 +138,8 @@ test('renders artifacts in the poll that completes the run', async () => {
   assert.ok(rendered.some((line) => line.includes('build-output')));
   assert.ok(rendered.some((line) => line.includes('[ download ]')));
   assert.ok(
-    Array.from(app.clickTargets.values()).some(
-      (target) => target.kind === 'artifact',
+    Array.from(app.clickTargets.values()).some((entries) =>
+      entries.some((entry) => entry.target.kind === 'artifact'),
     ),
   );
 });
@@ -163,7 +162,6 @@ test('downloads an artifact when its row is clicked', async () => {
     notified: true,
     scroll: 0,
     scrollMax: 0,
-    downloads: new Set(),
   };
   app.gh = {
     downloadArtifact: async (runId, value, options) => {
@@ -173,12 +171,12 @@ test('downloads an artifact when its row is clicked', async () => {
   };
 
   app.render();
-  const row = Array.from(app.clickTargets.entries()).find(
-    ([, target]) => target.kind === 'artifact',
-  )[0];
-  assert.ok(row, 'expected a clickable artifact row');
+  const [rowY, entries] = Array.from(app.clickTargets.entries()).find(([, list]) =>
+    list.some((entry) => entry.target.kind === 'artifact'),
+  );
+  assert.ok(entries, 'expected a clickable artifact row');
 
-  app.onClick({ type: 'click', y: row });
+  app.onClick({ type: 'click', y: rowY, x: entries.find((entry) => entry.target.kind === 'artifact').start });
   await waitFor(() => app.message.startsWith('Downloaded'));
 
   assert.equal(download.runId, 11);

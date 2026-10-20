@@ -122,8 +122,16 @@ test('formats artifact sizes', () => {
   assert.equal(fmt.fmtBytes(Number.NaN), '');
 });
 
-test('computes duration between timestamps', () => {
+test('formats timestamps with zero-padded date and time', () => {
+  assert.equal(fmt.fmtDateTime('2026-01-02T03:04:00'), '2026-01-02 03:04');
   assert.equal(
+    fmt.fmtDateTime(Date.parse('2026-01-02T03:04:00')),
+    '2026-01-02 03:04',
+  );
+  assert.equal(fmt.fmtDateTime('not-a-date'), '');
+});
+
+test('computes duration between timestamps', () => {  assert.equal(
     fmt.durationBetween('2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z'),
     60000,
   );

@@ -296,6 +296,13 @@ class Gh {
     return data.workflow_runs || [];
   }
 
+  async latestRuns(workflowId, perPage = 5) {
+    const data = await this.apiJson(
+      this.repoPath(`/actions/workflows/${workflowId}/runs?per_page=${perPage}`),
+    );
+    return data.workflow_runs || [];
+  }
+
   async latestRunId(workflowId, { ref, actor } = {}) {
     const runs = await this.listRuns(workflowId, { ref, actor, perPage: 20 });
     return runs.reduce((max, run) => Math.max(max, Number(run.id) || 0), 0);

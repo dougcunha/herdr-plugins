@@ -21,6 +21,14 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function newestArtifact(group) {
+  return group.artifacts.reduce(
+    (newest, artifact) =>
+      Math.max(newest, Date.parse(artifact.created_at || '') || 0),
+    0,
+  );
+}
+
 /**
  * Runs an async mapper over a list with a bounded number of workers. The
  * workflow probe must read one file per workflow, so concurrency keeps the
@@ -86,9 +94,24 @@ class App {
 
     this.watch = null;
     this.pollTimer = null;
+    this.tab = 'dispatch';
+    this.artifactTab = {
+      groups: [],
+      failed: 0,
+      loaded: false,
+      loading: false,
+      error: null,
+      at: 0,
+      scroll: 0,
+      scrollMax: 0,
+      selected: 0,
+      targets: [],
+    };
+    this.downloads = new Set();
     this.clickTargets = new Map();
-    this.runClickLines = [];
+    this.clickLines = [];
     this.hoverY = -1;
+    this.hoverX = -1;
     this.hoverKey = null;
   }
 
@@ -608,7 +631,6 @@ class App {
       artifacts: [],
       artifactsLoaded: false,
       artifactsError: null,
-      downloads: new Set(),
       error: null,
       tick: 0,
       notified: false,
@@ -707,6 +729,60 @@ class App {
     watch.artifactsLoaded = true;
   }
 
+  /**
+   * Loads the artifacts of the most recent run that produced any, for every
+   * workflow. It runs only when the tab is opened and when Refresh is used, so
+   * the panel never spends API calls on it in the background.
+   */
+  async loadArtifactTab() {
+    const state = this.artifactTab;
+    if (state.loading || !this.gh) return;
+    state.loading = true;
+    state.error = null;
+    this.render();
+
+    let firstError = null;
+    let failed = 0;
+    try {
+      const list = await this.gh.listWorkflows();
+      const workflows = list.filter(
+        (workflow) =>
+          workflow.path &&
+          workflow.path.startsWith('.github/workflows/') &&
+          workflow.state !== 'deleted',
+      );
+
+      const groups = await mapLimit(workflows, 6, async (workflow) => {
+        try {
+          for (const run of await this.gh.latestRuns(workflow.id, 5)) {
+            const artifacts = await this.gh.listArtifacts(run.id);
+            if (artifacts.length > 0) return { workflow, run, artifacts };
+          }
+          return null;
+        } catch (error) {
+          failed += 1;
+          firstError = firstError || error;
+          return null;
+        }
+      });
+
+      const found = groups.filter(Boolean);
+      if (found.length === 0 && firstError) throw firstError;
+
+      state.groups = found.sort(
+        (left, right) => newestArtifact(right) - newestArtifact(left),
+      );
+      state.failed = failed;
+      state.loaded = true;
+      state.at = Date.now();
+    } catch (error) {
+      state.error = error;
+    } finally {
+      state.loading = false;
+      this.render();
+    }
+  }
+
   artifactKey(artifact) {
     return artifact?.id ?? artifact?.name ?? '';
   }
@@ -716,15 +792,27 @@ class App {
     if (target.kind === 'artifact') {
       return `artifact:${this.artifactKey(target.artifact)}`;
     }
+    if (target.kind === 'tab') return `tab:${target.tab}`;
     return target.kind;
+  }
+
+  clickAt(y, x) {
+    const entries = this.clickTargets.get(y);
+    if (!entries || entries.length === 0) return null;
+    if (x == null) return entries[0].target;
+    const hit = entries.find((entry) => x >= entry.start && x <= entry.end);
+    return hit ? hit.target : null;
   }
 
   onHover(event) {
     if (!event || event.type !== 'move') return;
-    const target = this.clickTargets.get(event.y);
+    const target = this.clickAt(event.y, event.x);
     const key = this.targetKey(target);
-    if (this.hoverY === event.y && this.hoverKey === key) return;
+    if (this.hoverY === event.y && this.hoverX === event.x && this.hoverKey === key) {
+      return;
+    }
     this.hoverY = event.y;
+    this.hoverX = event.x;
     this.hoverKey = key;
     if (typeof this.tui?.setPointer === 'function') {
       this.tui.setPointer(Boolean(target));
@@ -743,17 +831,34 @@ class App {
 
   onClick(event) {
     if (!event || event.type !== 'click') return;
-    const target = this.clickTargets.get(event.y);
-    if (target?.kind === 'artifact') {
-      this.downloadArtifact(target.artifact);
-    } else if (target?.kind === 'run') {
+    const target = this.clickAt(event.y, event.x);
+    if (!target) return;
+    if (target.kind === 'artifact') {
+      this.downloadArtifact(target.artifact, target.runId);
+    } else if (target.kind === 'run') {
       this.openRun();
+    } else if (target.kind === 'tab') {
+      this.openTab(target.tab);
+    } else if (target.kind === 'refresh') {
+      this.loadArtifactTab();
     }
   }
 
-  async downloadArtifact(artifact) {
-    const watch = this.watch;
-    if (!watch || !artifact) return;
+  openTab(tab) {
+    if (tab !== 'dispatch' && !this.gh) return;
+    this.tab = tab;
+    this.message = '';
+    if (tab === 'artifacts' && !this.artifactTab.loaded) {
+      if (!this.artifactTab.loading) return this.loadArtifactTab();
+      this.render();
+      return;
+    }
+    this.render();
+  }
+
+  async downloadArtifact(artifact, runId) {
+    const targetRun = runId ?? this.watch?.runId;
+    if (!artifact || !targetRun) return;
 
     if (artifact.expired) {
       this.message = `Artifact "${artifact.name}" has expired.`;
@@ -761,24 +866,23 @@ class App {
       return;
     }
 
-    const key = artifact.id ?? artifact.name;
-    if (!watch.downloads) watch.downloads = new Set();
-    if (watch.downloads.has(key)) return;
+    const key = this.artifactKey(artifact);
+    if (this.downloads.has(key)) return;
 
-    watch.downloads.add(key);
+    this.downloads.add(key);
     this.message = `Downloading ${artifact.name}...`;
     this.render();
 
     try {
-      const result = await this.gh.downloadArtifact(watch.runId, artifact, {
+      const result = await this.gh.downloadArtifact(targetRun, artifact, {
         dir: this.cwd,
       });
       this.message = `Downloaded ${artifact.name} to ${result.dir}`;
     } catch (error) {
       this.message = `Download failed: ${error.message}`;
     } finally {
-      watch.downloads.delete(key);
-      if (this.watch === watch) this.render();
+      this.downloads.delete(key);
+      this.render();
     }
   }
 
@@ -911,6 +1015,7 @@ class App {
     if (this.hoverKey != null) {
       this.hoverKey = null;
       this.hoverY = -1;
+      this.hoverX = -1;
       if (typeof this.tui?.setPointer === 'function') this.tui.setPointer(false);
     }
     if (event.type === 'quit') {
@@ -919,6 +1024,10 @@ class App {
     }
     if (event.type === 'ctrl' && event.name === 'l') {
       this.render();
+      return;
+    }
+    if (this.tab === 'artifacts') {
+      this.keyArtifacts(event);
       return;
     }
     if (
@@ -1028,6 +1137,10 @@ class App {
     }
     if (event.type === 'enter') {
       this.chooseWorkflow();
+      return;
+    }
+    if (event.type === 'tab' && !this.wfFilterMode) {
+      this.openTab('artifacts');
       return;
     }
     if (event.type === 'escape') {
@@ -1348,6 +1461,47 @@ class App {
     }
   }
 
+  keyArtifacts(event) {
+    const state = this.artifactTab;
+
+    if (
+      event.type === 'tab' ||
+      event.type === 'backtab' ||
+      event.type === 'escape' ||
+      (event.type === 'char' && event.ch === 'b')
+    ) {
+      this.openTab('dispatch');
+      return;
+    }
+    if (event.type === 'char' && event.ch === 'r') {
+      this.loadArtifactTab();
+      return;
+    }
+    if (event.type === 'char' && event.ch === 'q') {
+      this.quit();
+      return;
+    }
+    if (event.type === 'enter') {
+      const target = state.targets[state.selected];
+      if (target) this.downloadArtifact(target.artifact, target.runId);
+      return;
+    }
+
+    const last = Math.max(0, state.targets.length - 1);
+    if (event.type === 'up') state.selected = Math.max(0, state.selected - 1);
+    else if (event.type === 'down')
+      state.selected = Math.min(last, state.selected + 1);
+    else if (event.type === 'pageup')
+      state.selected = Math.max(0, state.selected - 10);
+    else if (event.type === 'pagedown')
+      state.selected = Math.min(last, state.selected + 10);
+    else if (event.type === 'home') state.selected = 0;
+    else if (event.type === 'end') state.selected = last;
+    else return;
+
+    this.render();
+  }
+
   leaveRun() {
     this.stopPoll();
     this.watch = null;
@@ -1414,6 +1568,7 @@ class App {
     };
     this.retry = retry;
     this.errorBack = back;
+    this.tab = 'dispatch';
     this.screen = 'error';
     this.message = '';
     this.render();
@@ -1474,6 +1629,55 @@ class App {
     return lines;
   }
 
+  tabLines(width) {
+    const tabs = [
+      { id: 'dispatch', label: 'Dispatch' },
+      { id: 'artifacts', label: 'Artifacts' },
+    ];
+    const spans = [];
+    let line = '';
+    let column = 0;
+
+    tabs.forEach((tab, index) => {
+      if (index > 0) {
+        line += '  ';
+        column += 2;
+      }
+      const active = this.tab === tab.id;
+      const glyph = active ? ui.icon('dot') : ui.icon('circle');
+      const plain = `${glyph} ${tab.label}`;
+      const target = { kind: 'tab', tab: tab.id };
+      let text;
+      if (active) {
+        text = `${glyph} ${fmt.style('accent', tab.label)}`;
+      } else if (this.hoverKey === this.targetKey(target)) {
+        text = ui.row(plain, plain.length, true);
+      } else {
+        text = `${glyph} ${fmt.style('muted', tab.label)}`;
+      }
+
+      spans.push({ start: column, end: column + plain.length - 1, target });
+      line += text;
+      column += plain.length;
+    });
+
+    if (this.tab === 'artifacts') {
+      const plain = `[ ${ui.icon('refresh')} Refresh ]`;
+      const plainWidth = fmt.visibleLength(plain);
+      const start = width - plainWidth;
+      if (start > column + 1) {
+        const button =
+          this.hoverKey === 'refresh'
+            ? ui.row(plain, plainWidth, true)
+            : fmt.style('accent', plain);
+        spans.push({ start, end: width - 1, target: { kind: 'refresh' } });
+        line = `${fmt.padRight(line, start - 1)} ${button}`;
+      }
+    }
+
+    return { lines: [fmt.truncateAnsi(line, width)], spans };
+  }
+
   stepNumber() {
     switch (this.screen) {
       case 'workflows':
@@ -1511,12 +1715,24 @@ class App {
   }
 
   footerPairs() {
+    if (this.tab === 'artifacts') {
+      const pairs = [
+        [ui.icon('updown'), 'select'],
+        ['Enter', 'download'],
+        ['r', 'refresh'],
+        ['Tab', 'dispatch'],
+        ['q', 'close'],
+      ];
+      return pairs;
+    }
+
     switch (this.screen) {
       case 'workflows':
         return [
           [ui.icon('updown'), 'move'],
           ['Enter', 'select'],
           ['/', 'filter'],
+          ['Tab', 'artifacts'],
           ['r', 'reload'],
           ['q', 'quit'],
         ];
@@ -1603,13 +1819,15 @@ class App {
     this.view = { columns, rows, boxed, margin, frameWidth, contentWidth };
 
     const header = this.headerLines(contentWidth);
-    const steps = this.stepLines(contentWidth);
+    const tabs = this.tabLines(contentWidth);
+    const steps = this.tab === 'artifacts' ? [] : this.stepLines(contentWidth);
     const footer = this.footerLines(contentWidth);
     const message = this.messageLines(contentWidth);
 
     const boxLines = boxed ? 2 : 0;
     const fixed =
       header.length +
+      tabs.lines.length +
       (steps.length > 0 ? steps.length + 1 : 0) +
       1 +
       (message.length > 0 ? message.length + 1 : 0) +
@@ -1618,26 +1836,49 @@ class App {
     const available = Math.max(1, rows - boxLines - fixed);
 
     let body;
+    this.clickLines = [];
     try {
-      body = this.screenBody(contentWidth, available);
+      body =
+        this.tab === 'artifacts'
+          ? this.artifactsBody(contentWidth, available)
+          : this.screenBody(contentWidth, available);
     } catch (error) {
       body = [fmt.style('danger', error.message)];
     }
 
     const bodyStart =
-      header.length + (steps.length > 0 ? steps.length + 1 : 0) + 1;
+      header.length +
+      tabs.lines.length +
+      (steps.length > 0 ? steps.length + 1 : 0) +
+      1;
+    const firstLine = boxed ? 2 : 1;
+    const firstColumn = boxed ? margin + 3 : Math.max(1, margin) + 1;
+
     this.clickTargets = new Map();
-    if (this.screen === 'run') {
-      for (const { line, target } of this.runClickLines) {
-        if (line >= available) continue;
-        this.clickTargets.set(
-          (boxed ? 2 : 1) + bodyStart + line,
-          target,
-        );
-      }
+    const addTarget = (y, start, end, target) => {
+      const entries = this.clickTargets.get(y) || [];
+      entries.push({
+        start: firstColumn + start,
+        end: firstColumn + end,
+        target,
+      });
+      this.clickTargets.set(y, entries);
+    };
+
+    for (const span of tabs.spans) {
+      addTarget(firstLine + header.length, span.start, span.end, span.target);
+    }
+    for (const { line, start, end, target } of this.clickLines) {
+      if (line >= available) continue;
+      addTarget(
+        firstLine + bodyStart + line,
+        start ?? 0,
+        end ?? contentWidth - 1,
+        target,
+      );
     }
 
-    const hoveredTarget = this.clickTargets.get(this.hoverY);
+    const hoveredTarget = this.clickAt(this.hoverY, this.hoverX);
     this.hoverKey = this.targetKey(hoveredTarget);
     if (typeof this.tui.setPointer === 'function') {
       this.tui.setPointer(Boolean(hoveredTarget));
@@ -1645,6 +1886,7 @@ class App {
 
     const inner = [
       ...header,
+      ...tabs.lines,
       ...(steps.length > 0 ? ['', ...steps] : []),
       '',
       ...body.slice(0, available),
@@ -2109,7 +2351,7 @@ class App {
 
   runBody(width, height) {
     const watch = this.watch;
-    this.runClickLines = [];
+    this.clickLines = [];
     if (!watch) return [fmt.style('muted', 'No run selected.')];
 
     const run = watch.run;
@@ -2167,7 +2409,7 @@ class App {
         const line = this.hoverKey === 'run'
           ? ui.row(fmt.stripAnsi(openLine), width, true)
           : openLine;
-        this.runClickLines.push({
+        this.clickLines.push({
           line: header.length,
           target: { kind: 'run' },
         });
@@ -2287,9 +2529,9 @@ class App {
               this.targetKey({ kind: 'artifact', artifact });
           content.push(hovered ? ui.row(fmt.stripAnsi(line), width, true) : line);
           if (!expired) {
-            this.runClickLines.push({
+            this.clickLines.push({
               index: content.length - 1,
-              target: { kind: 'artifact', artifact },
+              target: { kind: 'artifact', artifact, runId: watch.runId },
             });
           }
         }
@@ -2309,7 +2551,7 @@ class App {
     watch.scroll = Math.max(0, Math.min(watch.scroll, watch.scrollMax));
     const visible = content.slice(watch.scroll, watch.scroll + visibleRows);
 
-    this.runClickLines = this.runClickLines
+    this.clickLines = this.clickLines
       .filter(
         ({ line, index }) =>
           line != null ||
@@ -2325,6 +2567,146 @@ class App {
       );
 
     return [...header, ...visible];
+  }
+
+  artifactsBody(width, height) {
+    const state = this.artifactTab;
+    this.clickLines = [];
+    state.targets = [];
+    const lines = [
+      fmt.spread(
+        `${ui.icon('download')} ${fmt.style('strong', 'Latest run artifacts')}`,
+        fmt.style('muted', state.at ? `updated ${fmt.fmtDateTime(state.at)}` : ''),
+        width,
+      ),
+      ui.rule(width),
+    ];
+
+    if (state.error) {
+      lines.push('');
+      for (const line of fmt.wrapText(
+        `${ui.icon('warn')} ${state.error.message}`,
+        width,
+      )) {
+        lines.push(fmt.style('warning', line));
+      }
+      lines.push(fmt.style('muted', 'Press r to try again.'));
+      return lines;
+    }
+
+    if (state.loading || !state.loaded) {
+      lines.push('');
+      lines.push(fmt.style('accent', `${ui.icon('running')} Loading artifacts…`));
+      return lines;
+    }
+
+    if (state.groups.length === 0) {
+      lines.push('');
+      lines.push(
+        fmt.style('muted', 'No artifacts in the latest run of any workflow.'),
+      );
+      if (state.failed > 0) {
+        lines.push(
+          fmt.style(
+            'muted',
+            `${state.failed} workflow${state.failed === 1 ? '' : 's'} could not be read.`,
+          ),
+        );
+      }
+      return lines;
+    }
+
+    const content = [];
+    const blocks = [];
+    for (const group of state.groups) {
+      content.push(
+        fmt.truncateAnsi(
+          `${ui.icon('workflow')} ${fmt.style('strong', group.workflow.name)}`,
+          width,
+        ),
+      );
+      const meta = [`#${group.run.run_number ?? '?'}`];
+      if (group.run.head_branch) meta.push(group.run.head_branch);
+      content.push(
+        fmt.truncateAnsi(fmt.style('muted', `  ${meta.join(' · ')}`), width),
+      );
+
+      for (const artifact of group.artifacts) {
+        const expired = Boolean(artifact.expired);
+        const start = content.length;
+        const target = { kind: 'artifact', artifact, runId: group.run.id };
+        const nameLines = fmt.wrapText(artifact.name, Math.max(4, width - 4));
+        nameLines.forEach((nameLine, index) => {
+          content.push(
+            fmt.truncateAnsi(
+              `${index === 0 && !expired ? `  ${ui.icon('download')} ` : '    '}${fmt.style(
+                expired ? 'muted' : 'info',
+                nameLine,
+              )}`,
+              width,
+            ),
+          );
+        });
+
+        const metaLine = [
+          fmt.fmtDateTime(artifact.created_at),
+          fmt.fmtBytes(artifact.size_in_bytes),
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        content.push(
+          fmt.truncateAnsi(
+            `    ${fmt.style('muted', metaLine)}${
+              expired
+                ? `  ${fmt.style('warning', 'expired')}`
+                : `  ${fmt.style('accent', '[ download ]')}`
+            }`,
+            width,
+          ),
+        );
+
+        if (!expired) {
+          for (let offset = 0; offset < content.length - start; offset += 1) {
+            this.clickLines.push({ index: start + offset, target });
+          }
+          blocks.push({ ...target, from: start, to: content.length - 1 });
+        }
+      }
+
+      content.push('');
+    }
+
+    const visibleRows = Math.max(3, height - lines.length);
+    state.scrollMax = Math.max(0, content.length - visibleRows);
+    state.targets = blocks;
+    state.selected = Math.max(0, Math.min(state.selected, blocks.length - 1));
+
+    // Keep the selected artifact on screen while the list is longer than it.
+    const current = blocks[state.selected];
+    let scroll = state.scroll;
+    if (current) {
+      if (current.from < scroll) scroll = current.from;
+      if (current.to >= scroll + visibleRows) scroll = current.to - visibleRows + 1;
+    }
+    state.scroll = Math.max(0, Math.min(scroll, state.scrollMax));
+
+    if (current) {
+      for (let index = current.from; index <= current.to; index += 1) {
+        content[index] = ui.row(fmt.stripAnsi(content[index]), width, true);
+      }
+    }
+
+    this.clickLines = this.clickLines
+      .filter(
+        ({ index }) =>
+          index >= state.scroll && index < state.scroll + visibleRows,
+      )
+      .map(({ index, target }) => ({
+        line: lines.length + index - state.scroll,
+        target,
+      }));
+
+    return [...lines, ...content.slice(state.scroll, state.scroll + visibleRows)];
   }
 
   errorBody(width, height) {

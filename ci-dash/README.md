@@ -5,22 +5,7 @@ current repository. It mirrors the **Run workflow** experience on GitHub:
 pick a workflow, pick the branch, fill in every `workflow_dispatch`
 input, dispatch the run, and follow it to its final status.
 
-```
-╭────────────────────────────────────────────────────────╮
-│ ◆ CI Dash         herdrdev/herdr                       │
-│ ⎇ main  ›  @ dougcunha                                 │
-│                                                        │
-│ ❯ 1 Workflow  ›  2 Ref  ›  3 Inputs  ›  4 Run          │
-│                                                        │
-│ ◆ Workflows                                         6  │
-│ ────────────────────────────────────────────────────── │
-│ ⌕ press / to filter                                    │
-│                                                        │
-│   ◆ Build artifacts  .github/workflows/build-artifacts │
-│ ❯ ◆ Release              .github/workflows/release.yml │
-│   ...                                                  │
-╰────────────────────────────────────────────────────────╯
-```
+![CI Dash dispatch tab: the workflow list, the step indicator, and the tab bar](docs/dispatch-tab.png)
 
 ## Requirements
 
@@ -183,9 +168,24 @@ If the plugin was linked from a checkout instead, run
    download and extract it to `.ci-dash/artifacts/<run-id>/<artifact-name>`
    under the project directory. Rows highlight under the mouse, and terminals
    that support OSC 22 switch to a pointing-hand cursor over them.
-   Expired artifacts stay listed but cannot be downloaded. Mouse reporting is
-   enabled only while artifact rows are visible, so text selection keeps
-   working everywhere else.
+   Expired artifacts stay listed but cannot be downloaded. Mouse reporting
+   stays on while the tab bar is shown, so rows can be clicked anywhere in the
+   panel; hold Shift while dragging to select text.
+
+### Artifacts tab
+
+The **Artifacts** tab lists the artifacts of the most recent run that produced
+any, for every workflow in the repository. Each entry shows the complete
+artifact name, its creation date, and its size. Select a row with the arrow
+keys and press Enter, or click it, to download it to
+`.ci-dash/artifacts/<run-id>/<artifact-name>` under the project directory.
+
+Nothing is fetched when the panel opens: the first time the tab is selected it
+loads on demand, and afterwards only the `[ ⟳ Refresh ]` button or `r` fetch
+again. Workflows whose latest runs produced nothing do not appear, and expired
+artifacts are listed without a download button.
+
+![CI Dash artifacts tab: the artifacts of the latest run of each workflow, with the selected row and the refresh button](docs/artifacts-tab.png)
 
 The input types supported by the GitHub API are handled as follows:
 
@@ -204,18 +204,18 @@ The input types supported by the GitHub API are handled as follows:
 | `↑` / `↓`        | Move in a list, or between fields.                  |
 | `PgUp` / `PgDn`  | Move ten rows at a time.                            |
 | `Home` / `End`   | Jump to the first or last row.                      |
-| `Enter`          | Select, edit, toggle, confirm, or open the run.     |
+| `Enter`          | Select, edit, toggle, confirm, open the run, or download the selected artifact. |
 | `←` / `→`        | Change a choice value.                              |
-| `Tab` / `Shift+Tab` | Next or previous field while editing.            |
+| `Tab` / `Shift+Tab` | Next or previous field while editing; switches tabs from the workflow list. |
 | `/`              | Filter workflows or refs.                           |
 | `Ctrl+D`         | Review inputs, then dispatch from the review page.  |
-| `r`              | Reload the current data or refresh the run.         |
+| `r`              | Reload the current data, the run, or the artifacts tab. |
 | `o`              | Open the run in the browser (same as `Enter` there). |
 | `c`              | Cancel the run.                                     |
 | `R`              | Rerun the run with the same inputs.                 |
 | `b`              | Go back, or start another workflow from the run screen. |
 | `q`              | Quit the panel.                                     |
-| `Esc`            | Go back on input screens; on the run screen, back once the run completes. |
+| `Esc`            | Go back on input screens; on the run screen, back once the run completes; on the artifacts tab, back to the dispatch flow. |
 | `Ctrl+C`         | Quit.                                               |
 
 ## Configuration
@@ -284,6 +284,11 @@ npm test
   runs `gh run download <run-id> --name <name>` into
   `.ci-dash/artifacts/<run-id>/<artifact-name>` so the checkout is not
   overwritten.
+- The Artifacts tab reads the workflow list, then the last runs of each
+  workflow (`GET /actions/workflows/{id}/runs?per_page=5`) until it finds one
+  with artifacts (`GET /actions/runs/{id}/artifacts`). That is two requests per
+  workflow in the common case, and it only runs when the tab is opened or
+  refreshed.
 
 ## Limitations
 
@@ -304,6 +309,11 @@ npm test
   that is not in those lists.
 - For very large repositories, the branch list is fetched in full before the
   ref picker opens.
+- The Artifacts tab shows the latest runs only: an artifact from an older run
+  beyond the last five runs of its workflow is not listed, and a run still in
+  progress shows the artifacts of the previous run that had them.
+- The Artifacts tab fans out over every workflow, so on repositories with many
+  workflows a refresh takes a few seconds.
 
 ## Security
 

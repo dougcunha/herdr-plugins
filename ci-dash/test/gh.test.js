@@ -127,6 +127,25 @@ test('lists run artifacts across paginated pages', async () => {
   assert.equal(capture.options.slurp, true);
 });
 
+test('reads the latest workflow runs without filtering by event', async () => {
+  const capture = {};
+  const gh = ghWithApi(async (path, options) => {
+    capture.path = path;
+    capture.options = options;
+    return {
+      stdout: JSON.stringify({ workflow_runs: [{ id: 5 }, { id: 4 }] }),
+    };
+  });
+
+  const runs = await gh.latestRuns(123, 5);
+
+  assert.deepEqual(runs.map((run) => run.id), [5, 4]);
+  assert.equal(
+    capture.path,
+    'repos/herdrdev/herdr/actions/workflows/123/runs?per_page=5',
+  );
+});
+
 test('downloads an artifact into a per-run directory', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-artifacts-'));
   const calls = [];

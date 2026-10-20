@@ -382,7 +382,9 @@ test('highlights the artifact row under the mouse', () => {
   app.tui.setPointer = (value) => pointers.push(value);
 
   app.render();
-  const row = Array.from(app.clickTargets.keys())[0];
+  const row = Array.from(app.clickTargets.entries()).find(([, entries]) =>
+    entries.some((entry) => entry.target.kind === 'artifact'),
+  )[0];
 
   app.onHover({ type: 'move', y: row });
 
@@ -405,10 +407,10 @@ test('opens the run when the Open run row is clicked', () => {
   };
 
   app.render();
-  const row = Array.from(app.clickTargets.entries()).find(
-    ([, target]) => target.kind === 'run',
-  )[0];
-  app.onClick({ type: 'click', y: row });
+  const row = Array.from(app.clickTargets.entries()).find(([, entries]) =>
+    entries.some((entry) => entry.target.kind === 'run'),
+  );
+  app.onClick({ type: 'click', y: row[0], x: row[1][0].start });
 
   assert.equal(opened, 123);
 });
@@ -422,6 +424,208 @@ test('marks expired artifacts without making them clickable', () => {
 
   const lines = app.runBody(80, 40).map((line) => fmt.stripAnsi(line));
   assert.ok(lines.some((line) => line.includes('old-output') && line.includes('expired')));
-  assert.equal(app.runClickLines.length, 0);
+  assert.equal(app.clickLines.length, 0);
+});
+
+function appWithArtifacts({ workflows = [], runs = {}, artifacts = {} } = {}) {
+  const app = new App({});
+  app.tui = { columns: 100, rows: 30, draw() {} };
+  app.repo = { host: 'github.com', owner: 'o', name: 'r', slug: 'o/r' };
+  app.repoData = { default_branch: 'main' };
+  app.gh = {
+    listWorkflows: async () => workflows,
+    latestRuns: async (workflowId) => runs[workflowId] || [],
+    listArtifacts: async (runId) => artifacts[runId] || [],
+    downloadArtifact: async (runId, artifact) => ({
+      dir: `/tmp/${runId}/${artifact.name}`,
+    }),
+  };
+  return app;
+}
+
+const BUILD = {
+  id: 1,
+  name: 'Build',
+  path: '.github/workflows/build.yml',
+  state: 'active',
+};
+const LINT = {
+  id: 2,
+  name: 'Lint',
+  path: '.github/workflows/lint.yml',
+  state: 'active',
+};
+
+function artifactsTabApp() {
+  const app = appWithArtifacts({
+    workflows: [BUILD, LINT],
+    runs: {
+      1: [
+        { id: 11, run_number: 2, head_branch: 'main' },
+        { id: 10, run_number: 1, head_branch: 'main' },
+      ],
+      2: [{ id: 20, run_number: 5, head_branch: 'dev' }],
+    },
+    artifacts: {
+      11: [],
+      10: [
+        {
+          id: 100,
+          name: 'build-output.zip',
+          size_in_bytes: 2048,
+          created_at: '2026-01-01T10:30:00',
+          expired: false,
+        },
+      ],
+      20: [
+        {
+          id: 200,
+          name: 'lint report.txt',
+          size_in_bytes: 10,
+          created_at: '2026-01-02T09:00:00',
+          expired: false,
+        },
+      ],
+    },
+  });
+  app.tab = 'artifacts';
+  app.screen = 'workflows';
+  return app;
+}
+
+test('reads the artifacts of the newest run that produced some', async () => {
+  const app = artifactsTabApp();
+
+  await app.loadArtifactTab();
+
+  assert.deepEqual(
+    app.artifactTab.groups.map((group) => group.run.id),
+    [20, 10],
+  );
+  assert.equal(app.artifactTab.loaded, true);
+});
+
+function artifactFixture(overrides = {}) {
+  return {
+    id: 100,
+    name: 'build-output.zip',
+    size_in_bytes: 2048,
+    created_at: '2026-01-01T10:30:00',
+    expired: false,
+    ...overrides,
+  };
+}
+
+function artifactGroup(artifacts) {
+  return {
+    workflow: BUILD,
+    run: { id: 10, run_number: 1, head_branch: 'main' },
+    artifacts,
+  };
+}
+
+test('artifacts tab shows the full name, creation date and size', () => {
+  const app = artifactsTabApp();
+  app.artifactTab.loaded = true;
+  app.artifactTab.groups = [artifactGroup([artifactFixture()])];
+
+  const lines = app.artifactsBody(90, 30).map((line) => fmt.stripAnsi(line));
+
+  assert.ok(lines.some((line) => line.includes('build-output.zip')));
+  assert.ok(lines.some((line) => line.includes('2026-01-01 10:30')));
+  assert.ok(lines.some((line) => line.includes('2 KB')));
+});
+
+function findClickTarget(app, kind) {
+  for (const [y, entries] of app.clickTargets) {
+    const hit = entries.find((entry) => entry.target.kind === kind);
+    if (hit) return { y, x: hit.start };
+  }
+  return null;
+}
+
+test('clicking an artifact row downloads it from its own run', async () => {
+  const app = artifactsTabApp();
+  app.artifactTab.loaded = true;
+  app.artifactTab.groups = [artifactGroup([artifactFixture()])];
+  const downloads = [];
+  app.gh.downloadArtifact = async (runId, artifact) => {
+    downloads.push([runId, artifact.name]);
+    return { dir: '/tmp/out' };
+  };
+
+  app.render();
+  app.onClick({ type: 'click', ...findClickTarget(app, 'artifact') });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(downloads, [[10, 'build-output.zip']]);
+});
+
+test('Enter downloads the artifact selected with the arrow keys', async () => {
+  const app = artifactsTabApp();
+  app.artifactTab.loaded = true;
+  app.artifactTab.groups = [
+    artifactGroup([
+      artifactFixture({ id: 100, name: 'first.zip', size_in_bytes: 1 }),
+      artifactFixture({ id: 101, name: 'old.zip', expired: true }),
+      artifactFixture({ id: 102, name: 'second.zip', size_in_bytes: 3 }),
+    ]),
+  ];
+  const downloads = [];
+  app.gh.downloadArtifact = async (runId, artifact) => {
+    downloads.push([runId, artifact.name]);
+    return { dir: '/tmp/out' };
+  };
+
+  app.render();
+  app.keyArtifacts({ type: 'down' });
+  app.keyArtifacts({ type: 'enter' });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(downloads, [[10, 'second.zip']]);
+});
+
+test('artifacts load on first open and the refresh button reloads them', async () => {
+  const app = appWithArtifacts();
+  let calls = 0;
+  app.gh.listWorkflows = async () => {
+    calls += 1;
+    return [];
+  };
+
+  await app.openTab('artifacts');
+  assert.equal(calls, 1);
+
+  app.openTab('dispatch');
+  await app.openTab('artifacts');
+  assert.equal(calls, 1);
+
+  app.onClick({ type: 'click', ...findClickTarget(app, 'refresh') });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 2);
+});
+
+test('artifacts tab reports a failed load and offers a retry', async () => {
+  const app = appWithArtifacts();
+  app.gh.listWorkflows = async () => {
+    throw new Error('boom');
+  };
+
+  await app.loadArtifactTab();
+  const lines = app.artifactsBody(80, 20).map((line) => fmt.stripAnsi(line));
+
+  assert.equal(app.artifactTab.loaded, false);
+  assert.ok(lines.some((line) => line.includes('boom')));
+  assert.ok(lines.some((line) => line.includes('r to try again')));
+});
+
+test('Tab switches between the dispatch flow and the artifacts tab', () => {
+  const app = appWithArtifacts();
+
+  app.keyWorkflows({ type: 'tab' });
+  assert.equal(app.tab, 'artifacts');
+
+  app.keyArtifacts({ type: 'tab' });
+  assert.equal(app.tab, 'dispatch');
 });
 
