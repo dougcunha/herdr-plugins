@@ -1,17 +1,38 @@
 {
-  "name": "ci-dash",
+  "name": "@dougcunha/ci-dash",
   "version": "0.1.0",
-  "private": true,
   "description": "GitHub Actions in a Herdr pane: dispatch workflows with ref and inputs, watch live.",
   "license": "MIT",
   "type": "commonjs",
   "engines": {
     "node": ">=20"
   },
+  "bin": {
+    "ci-dash": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "herdr-plugin.toml",
+    "package-lock.json",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dougcunha/herdr-plugins.git",
+    "directory": "ci-dash"
+  },
+  "homepage": "https://github.com/dougcunha/herdr-plugins/tree/main/ci-dash",
+  "bugs": {
+    "url": "https://github.com/dougcunha/herdr-plugins/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test",
     "diagnose": "node src/dashboard.js --diagnose",
-    "start": "node src/dashboard.js"
+    "start": "node src/dashboard.js",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "yaml": "^2.8.1"

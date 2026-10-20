@@ -38,7 +38,22 @@ existing GitHub CLI session is reused.
 
 ## Install
 
-From this directory:
+With Bun:
+
+```sh
+bunx @dougcunha/ci-dash install
+```
+
+The installer copies the plugin to a stable per-user directory, installs its
+dependencies, links it with Herdr, and adds the keybindings. It requires
+Node.js 20 or newer, the Herdr CLI, and `gh`. Use `--no-keys` to skip the
+keybindings, or `--dir <path>` to choose another install directory:
+
+```sh
+bunx @dougcunha/ci-dash install --no-keys --dir ~/.local/share/herdr/plugins/ci-dash
+```
+
+From a checkout:
 
 ```sh
 npm ci --omit=dev

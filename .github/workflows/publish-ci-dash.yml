@@ -1,0 +1,47 @@
+name: Publish CI Dash
+
+on:
+  push:
+    tags:
+      - "ci-dash-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ci-dash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: ci-dash/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/ci-dash-v')
+        run: |
+          expected="ci-dash-v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match $expected" >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: npm test
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
