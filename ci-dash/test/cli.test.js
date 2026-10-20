@@ -11,6 +11,9 @@ const {
   defaultInstallDir,
   installPlugin,
   parseArgs,
+  removeInstallDir,
+  removeKeybindings,
+  uninstallPlugin,
 } = require('../src/cli');
 
 function makeSource() {
@@ -90,6 +93,14 @@ test('parses install flags', () => {
   assert.throws(() => parseArgs(['update']), /Unknown command/);
   assert.throws(() => parseArgs(['install', '--dir']), /needs a path/);
   assert.throws(() => parseArgs(['install', '--bogus']), /Unknown option/);
+});
+
+test('parses uninstall flags', () => {
+  assert.equal(parseArgs(['uninstall']).command, 'uninstall');
+  assert.equal(parseArgs(['uninstall', '--keep-keys']).keys, false);
+  assert.equal(parseArgs(['uninstall', '--dir=/tmp/plugins']).dir, '/tmp/plugins');
+  assert.throws(() => parseArgs(['uninstall', '--no-keys']), /only valid with install/);
+  assert.throws(() => parseArgs(['install', '--keep-keys']), /only valid with uninstall/);
 });
 
 test('keeps the package and manifest versions in sync', () => {
@@ -236,6 +247,168 @@ test('relinks when Herdr reports the plugin as already linked', () => {
       ),
     );
     assert.equal(links, 2);
+  } finally {
+    fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('removes the CI Dash keybinding block', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-config-'));
+  const config = path.join(root, 'config.toml');
+  const calls = [];
+  try {
+    fs.writeFileSync(
+      config,
+      [
+        'theme = "dark"',
+        '',
+        '# ci-dash:begin (managed by the CI Dash plugin)',
+        '[[keys.command]]',
+        'key = "prefix+alt+g"',
+        'command = "ci-dash.open"',
+        '# ci-dash:end',
+        '',
+        'after = true',
+        '',
+      ].join('\n'),
+    );
+
+    const result = removeKeybindings({
+      configPath: config,
+      run: fakeRun(calls),
+    });
+
+    assert.equal(result.status, 'removed');
+    assert.equal(result.reloaded, true);
+    assert.ok(fs.existsSync(result.backupPath));
+    const text = fs.readFileSync(config, 'utf8');
+    assert.ok(!text.includes('# ci-dash:begin'));
+    assert.ok(!text.includes('ci-dash.open'));
+    assert.ok(text.includes('theme = "dark"'));
+    assert.ok(text.includes('after = true'));
+    assert.deepEqual(
+      calls.map(({ command, args }) => [command, args]),
+      [['herdr', ['server', 'reload-config']]],
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('reports keybindings that are already absent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-config-'));
+  const config = path.join(root, 'config.toml');
+  try {
+    fs.writeFileSync(config, 'theme = "dark"\n');
+    const result = removeKeybindings({ configPath: config, run: fakeRun([]) });
+    assert.equal(result.status, 'absent');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('removes an install directory only when it contains CI Dash', () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-source-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-remove-'));
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-other-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'herdr-plugin.toml'),
+      'id = "ci-dash"\nversion = "0.1.0"\n',
+    );
+    fs.writeFileSync(path.join(other, 'herdr-plugin.toml'), 'id = "other"\n');
+
+    assert.equal(removeInstallDir({ source, dir }), true);
+    assert.ok(!fs.existsSync(dir));
+    assert.throws(
+      () => removeInstallDir({ source, dir: other }),
+      /does not look like a CI Dash install/,
+    );
+    assert.throws(
+      () => removeInstallDir({ source, dir: source }),
+      /outside the plugin source tree/,
+    );
+  } finally {
+    fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true });
+  }
+});
+
+test('unlinks, removes files, and drops keybindings', () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-source-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-uninstall-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-config-'));
+  const config = path.join(root, 'config.toml');
+  const calls = [];
+  const lines = [];
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'herdr-plugin.toml'),
+      'id = "ci-dash"\nversion = "0.1.0"\n',
+    );
+    fs.writeFileSync(
+      config,
+      '# ci-dash:begin\ncommand = "ci-dash.open"\n# ci-dash:end\n',
+    );
+
+    const result = uninstallPlugin({
+      source,
+      dir,
+      env: { HERDR_CONFIG_PATH: config },
+      run: fakeRun(calls),
+      keys: true,
+      log: (line) => lines.push(line),
+    });
+
+    assert.deepEqual(result, {
+      unlinked: true,
+      removed: true,
+      keysStatus: 'removed',
+    });
+    assert.ok(!fs.existsSync(dir));
+    assert.ok(!fs.readFileSync(config, 'utf8').includes('ci-dash'));
+    assert.deepEqual(
+      calls.map(({ command, args }) => [command, args]),
+      [
+        ['herdr', ['plugin', 'unlink', 'ci-dash']],
+        ['herdr', ['server', 'reload-config']],
+      ],
+    );
+    assert.ok(lines.some((line) => line.includes('Unlinked ci-dash')));
+  } finally {
+    fs.rmSync(source, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('continues when the plugin was not linked', () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-source-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-uninstall-'));
+  try {
+    fs.writeFileSync(
+      path.join(dir, 'herdr-plugin.toml'),
+      'id = "ci-dash"\nversion = "0.1.0"\n',
+    );
+    const result = uninstallPlugin({
+      source,
+      dir,
+      env: { HERDR_CONFIG_PATH: path.join(source, 'missing.toml') },
+      keys: false,
+      run: fakeRun([], () => ({
+        status: 1,
+        stderr: 'plugin ci-dash is not linked',
+      })),
+    });
+
+    assert.deepEqual(result, {
+      unlinked: false,
+      removed: true,
+      keysStatus: 'skipped',
+    });
+    assert.ok(!fs.existsSync(dir));
   } finally {
     fs.rmSync(source, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });

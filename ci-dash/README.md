@@ -108,11 +108,19 @@ The pane opens in the workspace directory (or the focused pane's working
 directory), not in the plugin directory. The panel can be resized with the
 normal Herdr pane resize keys.
 
-To unlink the plugin:
+## Uninstall
 
 ```sh
-herdr plugin unlink ci-dash
+bunx @dougcunha/ci-dash uninstall
 ```
+
+The uninstaller unlinks CI Dash from Herdr, removes the installed plugin files,
+and deletes the managed keybinding block from `config.toml`. Use `--keep-keys`
+to leave the keybindings in place, or `--dir <path>` when the plugin was
+installed into a custom directory.
+
+If the plugin was linked from a checkout instead, run
+`herdr plugin unlink ci-dash` and delete the checkout manually.
 
 ## Usage
 

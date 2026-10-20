@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { version: VERSION } = require('../package.json');
+const { resolveConfigPath } = require('./setup-keys');
 
 const PLUGIN_ID = 'ci-dash';
 const PACKAGE_NAME = '@dougcunha/ci-dash';
@@ -17,15 +18,20 @@ const COPY_ENTRIES = [
   'README.md',
 ];
 
-const USAGE = `Install CI Dash into Herdr.
+const USAGE = `Install or uninstall CI Dash in Herdr.
 
-Usage: ${PACKAGE_NAME} install [options]
+Usage: ${PACKAGE_NAME} <install|uninstall> [options]
 
 Options:
-  --dir <path>   Install into this directory instead of the default
-  --no-keys      Do not add the Herdr keybindings
+  --dir <path>   Use this plugin directory instead of the default
   -h, --help     Show this help
-  -v, --version  Show the installer version`;
+  -v, --version  Show the installer version
+
+Install options:
+  --no-keys      Do not add the Herdr keybindings
+
+Uninstall options:
+  --keep-keys    Keep the Herdr keybindings in config.toml`;
 
 function expandHome(value, home = os.homedir()) {
   const text = String(value || '');
@@ -79,7 +85,7 @@ function parseArgs(argv) {
   if (args[0] && !args[0].startsWith('-')) {
     options.command = args.shift();
   }
-  if (options.command !== 'install') {
+  if (options.command !== 'install' && options.command !== 'uninstall') {
     throw new Error(`Unknown command: ${options.command}`);
   }
 
@@ -90,6 +96,14 @@ function parseArgs(argv) {
     } else if (arg === '-v' || arg === '--version') {
       options.version = true;
     } else if (arg === '--no-keys') {
+      if (options.command !== 'install') {
+        throw new Error('--no-keys is only valid with install');
+      }
+      options.keys = false;
+    } else if (arg === '--keep-keys') {
+      if (options.command !== 'uninstall') {
+        throw new Error('--keep-keys is only valid with uninstall');
+      }
       options.keys = false;
     } else if (arg === '--dir') {
       const value = args.shift();
@@ -141,7 +155,7 @@ function runOrThrow(run, command, args, options = {}) {
   return result;
 }
 
-function copyPlugin({ source, dir }) {
+function assertOutsideSource(source, dir) {
   const sourcePath = path.resolve(source);
   const dirPath = path.resolve(dir);
   if (
@@ -149,13 +163,17 @@ function copyPlugin({ source, dir }) {
     sourcePath.startsWith(`${dirPath}${path.sep}`) ||
     dirPath.startsWith(`${sourcePath}${path.sep}`)
   ) {
-    throw new Error('Install directory must be outside the plugin source tree.');
+    throw new Error('Plugin directory must be outside the plugin source tree.');
   }
+  return dirPath;
+}
 
+function copyPlugin({ source, dir }) {
+  const dirPath = assertOutsideSource(source, dir);
   fs.mkdirSync(dirPath, { recursive: true });
   const copied = [];
   for (const entry of COPY_ENTRIES) {
-    const from = path.join(sourcePath, entry);
+    const from = path.join(path.resolve(source), entry);
     if (!fs.existsSync(from)) continue;
     const to = path.join(dirPath, entry);
     fs.rmSync(to, { recursive: true, force: true });
@@ -226,6 +244,126 @@ function installPlugin({
   return { dir, packageManager, keysInstalled };
 }
 
+function removeInstallDir({ source, dir }) {
+  const dirPath = assertOutsideSource(source, dir);
+  if (!fs.existsSync(dirPath)) return false;
+
+  const manifest = path.join(dirPath, 'herdr-plugin.toml');
+  if (!fs.existsSync(manifest)) {
+    throw new Error(
+      `${dirPath} does not look like a CI Dash install. Remove it manually.`,
+    );
+  }
+  const text = fs.readFileSync(manifest, 'utf8');
+  if (!/^\s*id\s*=\s*"ci-dash"\s*$/m.test(text)) {
+    throw new Error(
+      `${dirPath} does not look like a CI Dash install. Remove it manually.`,
+    );
+  }
+
+  fs.rmSync(dirPath, { recursive: true, force: true });
+  return true;
+}
+
+function removeKeybindings({ configPath, herdr = 'herdr', run = defaultRun }) {
+  if (!configPath || !fs.existsSync(configPath)) {
+    return { status: 'missing', configPath };
+  }
+
+  const text = fs.readFileSync(configPath, 'utf8');
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  const begin = lines.findIndex((line) =>
+    line.trimStart().startsWith('# ci-dash:begin'),
+  );
+  const end = lines.findIndex(
+    (line, index) =>
+      index > begin && line.trimStart().startsWith('# ci-dash:end'),
+  );
+  if (begin < 0 || end < 0) {
+    return { status: 'absent', configPath };
+  }
+
+  let start = begin;
+  let finish = end;
+  if (start > 0 && lines[start - 1].trim() === '') start -= 1;
+  else if (finish + 1 < lines.length && lines[finish + 1].trim() === '') {
+    finish += 1;
+  }
+  lines.splice(start, finish - start + 1);
+
+  const backupPath = `${configPath}.ci-dash.bak`;
+  if (!fs.existsSync(backupPath)) {
+    fs.copyFileSync(configPath, backupPath);
+  }
+  fs.writeFileSync(configPath, lines.join(eol), 'utf8');
+
+  let reloaded = false;
+  if (run) {
+    const reload = run(herdr, ['server', 'reload-config']);
+    reloaded = Boolean(reload && !reload.error && reload.status === 0);
+  }
+  return { status: 'removed', configPath, backupPath, reloaded };
+}
+
+function unlinkPlugin({ herdr = 'herdr', run = defaultRun }) {
+  const result = run(herdr, ['plugin', 'unlink', PLUGIN_ID]);
+  if (result?.error?.code === 'ENOENT') {
+    throw new Error(describeFailure(herdr, result));
+  }
+  if (result && !result.error && result.status === 0) return true;
+
+  const output = String(result?.stderr || result?.stdout || '');
+  if (
+    !/not (?:linked|found|installed)|unknown plugin|no such plugin/i.test(
+      output,
+    )
+  ) {
+    throw new Error(describeFailure(herdr, result));
+  }
+  return false;
+}
+
+function uninstallPlugin({
+  source,
+  dir,
+  herdr = 'herdr',
+  keys = true,
+  env = process.env,
+  run = defaultRun,
+  log = () => {},
+}) {
+  const unlinked = unlinkPlugin({ herdr, run });
+  if (unlinked) log(`Unlinked ${PLUGIN_ID} from Herdr`);
+  else log(`${PLUGIN_ID} was not linked; continuing`);
+
+  const removed = removeInstallDir({ source, dir });
+  if (removed) log(`Removed ${path.resolve(dir)}`);
+  else log(`No install directory found at ${path.resolve(dir)}`);
+
+  let keysStatus = 'skipped';
+  if (keys) {
+    try {
+      const configPath = resolveConfigPath({ env, herdr, run });
+      const result = removeKeybindings({ configPath, herdr, run });
+      keysStatus = result.status;
+      if (result.status === 'removed') {
+        log(`Removed the CI Dash keybindings from ${result.configPath}`);
+        if (!result.reloaded) {
+          log('Run "herdr server reload-config" or restart Herdr to apply.');
+        }
+      } else if (result.status === 'absent') {
+        log('No CI Dash keybinding block was found.');
+      }
+    } catch (error) {
+      keysStatus = 'error';
+      log(`Warning: keybindings were not removed: ${error.message}`);
+    }
+  }
+
+  return { unlinked, removed, keysStatus };
+}
+
 function main(
   argv = process.argv.slice(2),
   {
@@ -261,6 +399,21 @@ function main(
   const herdr = env.HERDR_BIN_PATH || 'herdr';
 
   try {
+    if (options.command === 'uninstall') {
+      out(`Uninstalling CI Dash from ${dir}`);
+      uninstallPlugin({
+        source,
+        dir,
+        herdr,
+        keys: options.keys,
+        env,
+        run,
+        log: out,
+      });
+      out('CI Dash uninstalled.');
+      return 0;
+    }
+
     out(`Installing CI Dash ${VERSION} to ${dir}`);
     installPlugin({
       source,
@@ -274,7 +427,7 @@ function main(
     out(`CI Dash is ready. Open it with: herdr plugin action invoke ${PLUGIN_ID}.open`);
     return 0;
   } catch (error) {
-    err(`Install failed: ${error.message}`);
+    err(`${options.command === 'uninstall' ? 'Uninstall' : 'Install'} failed: ${error.message}`);
     return 1;
   }
 }
@@ -295,4 +448,8 @@ module.exports = {
   installPlugin,
   main,
   parseArgs,
+  removeInstallDir,
+  removeKeybindings,
+  unlinkPlugin,
+  uninstallPlugin,
 };
