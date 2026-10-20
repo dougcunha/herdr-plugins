@@ -75,6 +75,9 @@ test('dispatches, then polls the run to its final status', async () => {
         steps: [{ name: 'checkout', status: 'completed', conclusion: 'success' }],
       },
     ],
+    listArtifacts: async () => [
+      { id: 3, name: 'build-output', size_in_bytes: 2048, expired: false },
+    ],
   };
 
   await app.dispatch();
@@ -86,6 +89,49 @@ test('dispatches, then polls the run to its final status', async () => {
   assert.equal(app.watch.runId, 11);
   assert.equal(app.watch.run.conclusion, 'success');
   assert.equal(app.watch.jobs.length, 1);
+  assert.equal(app.watch.artifacts.length, 1);
+  assert.equal(app.watch.artifactsLoaded, true);
+});
+
+test('downloads an artifact when its row is clicked', async () => {
+  const app = prepare(new App({}));
+  app.cwd = 'C:/repo';
+  const artifact = { id: 3, name: 'build-output', size_in_bytes: 2048, expired: false };
+  let download = null;
+
+  app.tui = { columns: 100, rows: 30, draw() {} };
+  app.screen = 'run';
+  app.watch = {
+    runId: 11,
+    run: completedRun(),
+    jobs: [],
+    artifacts: [artifact],
+    artifactsLoaded: true,
+    finished: true,
+    notified: true,
+    scroll: 0,
+    scrollMax: 0,
+    downloads: new Set(),
+  };
+  app.gh = {
+    downloadArtifact: async (runId, value, options) => {
+      download = { runId, artifact: value, options };
+      return { dir: 'C:/repo/.ci-dash/artifacts/11/build-output' };
+    },
+  };
+
+  app.render();
+  const row = Array.from(app.clickTargets.keys())[0];
+  assert.ok(row, 'expected a clickable artifact row');
+
+  app.onClick({ type: 'click', y: row });
+  await waitFor(() => app.message.startsWith('Downloaded'));
+
+  assert.equal(download.runId, 11);
+  assert.equal(download.artifact, artifact);
+  assert.deepEqual(download.options, { dir: 'C:/repo' });
+  assert.match(app.message, /build-output/);
+  assert.match(app.message, /\.ci-dash/);
 });
 
 test('correlates the run when dispatch returns no details', async () => {

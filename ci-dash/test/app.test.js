@@ -340,3 +340,37 @@ test('run footer labels b as a new run and offers Esc only after completion', ()
   assert.ok(done.footerPairs().some(([key, label]) => key === 'Esc' && label === 'back'));
 });
 
+test('lists artifacts only after the run completes', () => {
+  const app = appOnRun('completed');
+  app.watch.artifacts = [
+    { id: 1, name: 'build-output', size_in_bytes: 2048, expired: false },
+  ];
+
+  const lines = app.runBody(80, 40).map((line) => fmt.stripAnsi(line));
+  assert.ok(lines.some((line) => line.includes('Artifacts')));
+  assert.ok(lines.some((line) => line.includes('build-output') && line.includes('2 KB')));
+
+  app.watch.artifacts = [];
+  const without = app.runBody(80, 40).map((line) => fmt.stripAnsi(line));
+  assert.ok(!without.some((line) => line.includes('Artifacts')));
+
+  const running = appOnRun('in_progress');
+  running.watch.artifacts = [
+    { id: 1, name: 'build-output', size_in_bytes: 2048, expired: false },
+  ];
+  const during = running.runBody(80, 40).map((line) => fmt.stripAnsi(line));
+  assert.ok(!during.some((line) => line.includes('Artifacts')));
+});
+
+test('marks expired artifacts without making them clickable', () => {
+  const app = appOnRun('completed');
+  app.watch.artifacts = [
+    { id: 1, name: 'old-output', size_in_bytes: 1024, expired: true },
+  ];
+  app.render();
+
+  const lines = app.runBody(80, 40).map((line) => fmt.stripAnsi(line));
+  assert.ok(lines.some((line) => line.includes('old-output') && line.includes('expired')));
+  assert.equal(app.runClickLines.length, 0);
+});
+

@@ -113,6 +113,15 @@ test('formats durations', () => {
   assert.equal(fmt.fmtDuration(Number.NaN), '');
 });
 
+test('formats artifact sizes', () => {
+  assert.equal(fmt.fmtBytes(0), '0 B');
+  assert.equal(fmt.fmtBytes(512), '512 B');
+  assert.equal(fmt.fmtBytes(1024), '1 KB');
+  assert.equal(fmt.fmtBytes(1536), '1.5 KB');
+  assert.equal(fmt.fmtBytes(10 * 1024 * 1024), '10 MB');
+  assert.equal(fmt.fmtBytes(Number.NaN), '');
+});
+
 test('computes duration between timestamps', () => {
   assert.equal(
     fmt.durationBetween('2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z'),

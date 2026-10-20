@@ -85,6 +85,8 @@ class App {
 
     this.watch = null;
     this.pollTimer = null;
+    this.clickTargets = new Map();
+    this.runClickLines = [];
   }
 
   async run() {
@@ -101,6 +103,7 @@ class App {
     try {
       this.tui = new Tui({
         onKey: (event) => this.onKey(event),
+        onClick: (event) => this.onClick(event),
         onResize: () => this.render(),
       });
       this.tui.start();
@@ -598,6 +601,10 @@ class App {
       runId,
       run: null,
       jobs: [],
+      artifacts: [],
+      artifactsLoaded: false,
+      artifactsError: null,
+      downloads: new Set(),
       error: null,
       tick: 0,
       notified: false,
@@ -649,6 +656,10 @@ class App {
         }
       }
 
+      if (run.status === 'completed' && !watch.artifactsLoaded) {
+        await this.loadArtifacts(watch);
+      }
+
       this.updatePaneTitle(run);
       this.render();
 
@@ -675,6 +686,56 @@ class App {
       }
     } finally {
       watch.inFlight = false;
+    }
+  }
+
+  async loadArtifacts(watch) {
+    try {
+      const artifacts = await this.gh.listArtifacts(watch.runId);
+      if (this.watch !== watch) return;
+      watch.artifacts = artifacts;
+      watch.artifactsError = null;
+    } catch (error) {
+      if (this.watch !== watch) return;
+      watch.artifactsError = error;
+    }
+    watch.artifactsLoaded = true;
+  }
+
+  onClick(event) {
+    if (!event || event.type !== 'click') return;
+    const artifact = this.clickTargets.get(event.y);
+    if (artifact) this.downloadArtifact(artifact);
+  }
+
+  async downloadArtifact(artifact) {
+    const watch = this.watch;
+    if (!watch || !artifact) return;
+
+    if (artifact.expired) {
+      this.message = `Artifact "${artifact.name}" has expired.`;
+      this.render();
+      return;
+    }
+
+    const key = artifact.id ?? artifact.name;
+    if (!watch.downloads) watch.downloads = new Set();
+    if (watch.downloads.has(key)) return;
+
+    watch.downloads.add(key);
+    this.message = `Downloading ${artifact.name}...`;
+    this.render();
+
+    try {
+      const result = await this.gh.downloadArtifact(watch.runId, artifact, {
+        dir: this.cwd,
+      });
+      this.message = `Downloaded ${artifact.name} to ${result.dir}`;
+    } catch (error) {
+      this.message = `Download failed: ${error.message}`;
+    } finally {
+      watch.downloads.delete(key);
+      if (this.watch === watch) this.render();
     }
   }
 
@@ -1215,6 +1276,9 @@ class App {
           watch.finished = false;
           watch.notified = false;
           watch.tick = 0;
+          watch.artifacts = [];
+          watch.artifactsLoaded = false;
+          watch.artifactsError = null;
           this.pollWatch();
         })
         .catch((error) => {
@@ -1224,6 +1288,7 @@ class App {
       return;
     }
     if (event.type === 'char' && event.ch === 'r') {
+      watch.artifactsLoaded = false;
       this.pollWatch();
       return;
     }
@@ -1453,6 +1518,9 @@ class App {
           ['r', 'refresh'],
           ['b', 'new run'],
         ];
+        if (this.watch?.artifacts?.length > 0) {
+          pairs.push(['click', 'download artifact']);
+        }
         if (this.watch?.run?.status === 'completed') pairs.push(['Esc', 'back']);
         pairs.push(['q', 'close']);
         return pairs;
@@ -1514,6 +1582,19 @@ class App {
       body = [fmt.style('danger', error.message)];
     }
 
+    const bodyStart =
+      header.length + (steps.length > 0 ? steps.length + 1 : 0) + 1;
+    this.clickTargets = new Map();
+    if (this.screen === 'run') {
+      for (const { line, artifact } of this.runClickLines) {
+        if (line >= available) continue;
+        this.clickTargets.set(
+          (boxed ? 2 : 1) + bodyStart + line,
+          artifact,
+        );
+      }
+    }
+
     const inner = [
       ...header,
       ...(steps.length > 0 ? ['', ...steps] : []),
@@ -1532,11 +1613,17 @@ class App {
         framed.push(ui.frameRow(line, contentWidth));
       }
       framed.push(ui.frameBottom(contentWidth));
+      if (typeof this.tui.setMouse === 'function') {
+        this.tui.setMouse(this.clickTargets.size > 0);
+      }
       this.tui.draw(framed.map((line) => `${' '.repeat(margin)}${line}`));
       return;
     }
 
     const marginText = ' '.repeat(Math.max(1, margin));
+    if (typeof this.tui.setMouse === 'function') {
+      this.tui.setMouse(this.clickTargets.size > 0);
+    }
     this.tui.draw(
       inner.slice(0, rows).map((line) => `${marginText}${line}`),
     );
@@ -1974,6 +2061,7 @@ class App {
 
   runBody(width, height) {
     const watch = this.watch;
+    this.runClickLines = [];
     if (!watch) return [fmt.style('muted', 'No run selected.')];
 
     const run = watch.run;
@@ -2109,12 +2197,62 @@ class App {
           }`,
         ),
       );
+
+      if (watch.artifacts?.length > 0) {
+        content.push('');
+        content.push(
+          fmt.spread(
+            fmt.style('strong', 'Artifacts'),
+            fmt.style('muted', `${watch.artifacts.length}`),
+            width,
+          ),
+        );
+        content.push(ui.rule(width));
+        for (const artifact of watch.artifacts) {
+          const expired = Boolean(artifact.expired);
+          const size = fmt.fmtBytes(artifact.size_in_bytes);
+          const meta = expired ? 'expired' : size;
+          const line = fmt.spread(
+            `${fmt.style(
+              expired ? 'muted' : 'info',
+              `${ui.icon('download')} ${artifact.name}`,
+            )}`,
+            meta ? fmt.style(expired ? 'warning' : 'muted', meta) : '',
+            width,
+          );
+          content.push(line);
+          if (!expired) {
+            this.runClickLines.push({
+              index: content.length - 1,
+              artifact,
+            });
+          }
+        }
+      } else if (watch.artifactsError) {
+        content.push('');
+        content.push(
+          fmt.style(
+            'warning',
+            `${ui.icon('warn')} Could not list artifacts: ${watch.artifactsError.message}`,
+          ),
+        );
+      }
     }
 
     const visibleRows = Math.max(3, height - header.length);
     watch.scrollMax = Math.max(0, content.length - visibleRows);
     watch.scroll = Math.max(0, Math.min(watch.scroll, watch.scrollMax));
     const visible = content.slice(watch.scroll, watch.scroll + visibleRows);
+
+    this.runClickLines = this.runClickLines
+      .filter(
+        ({ index }) =>
+          index >= watch.scroll && index < watch.scroll + visibleRows,
+      )
+      .map(({ index, artifact }) => ({
+        line: header.length + index - watch.scroll,
+        artifact,
+      }));
 
     return [...header, ...visible];
   }

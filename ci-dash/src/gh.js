@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 
 class GhError extends Error {
@@ -109,10 +111,20 @@ function encodePath(path) {
   return String(path).split('/').map(encodeURIComponent).join('/');
 }
 
+function safeArtifactDir(name) {
+  const cleaned = String(name || '')
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/^\.+/, '_')
+    .replace(/[. ]+$/, '');
+  return cleaned || 'artifact';
+}
+
 class Gh {
-  constructor({ host, repo }) {
+  constructor({ host, repo, run = runGh }) {
     this.host = host || 'github.com';
     this.repo = repo;
+    this.run = run;
   }
 
   get slug() {
@@ -144,7 +156,7 @@ class Gh {
     args.push(path);
 
     try {
-      return await runGh(args, { input, timeout });
+      return await this.run(args, { input, timeout });
     } catch (error) {
       if (error instanceof GhError) {
         error.path = path;
@@ -300,6 +312,49 @@ class Gh {
     );
     const pages = Array.isArray(data) ? data : [data];
     return pages.flatMap((page) => page.jobs || []);
+  }
+
+  async listArtifacts(runId) {
+    const data = await this.apiJson(
+      this.repoPath(`/actions/runs/${runId}/artifacts?per_page=100`),
+      { paginate: true, slurp: true },
+    );
+    const pages = Array.isArray(data) ? data : [data];
+    return pages.flatMap((page) => page.artifacts || []);
+  }
+
+  async downloadArtifact(runId, artifact, { dir } = {}) {
+    const name = String(artifact?.name || '').trim();
+    if (!name) throw new GhError('The artifact has no name.');
+    if (artifact.expired) {
+      throw new GhError(`Artifact "${name}" has expired and can no longer be downloaded.`);
+    }
+
+    const root = path.resolve(dir || process.cwd());
+    const target = path.join(
+      root,
+      '.ci-dash',
+      'artifacts',
+      String(runId),
+      safeArtifactDir(name),
+    );
+    fs.mkdirSync(target, { recursive: true });
+
+    await this.run(
+      [
+        'run',
+        'download',
+        String(runId),
+        '--name',
+        name,
+        '--dir',
+        target,
+        '-R',
+        `${this.host}/${this.slug}`,
+      ],
+      { timeout: 600000 },
+    );
+    return { dir: target };
   }
 
   async listEnvironments() {

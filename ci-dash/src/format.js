@@ -314,6 +314,21 @@ function fmtDuration(milliseconds) {
   return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
+function fmtBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) return '';
+  if (value < 1024) return `${Math.round(value)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = value / 1024;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const rounded = size >= 100 ? Math.round(size) : Number(size.toFixed(1));
+  return `${rounded} ${units[unit]}`;
+}
+
 function durationBetween(start, end) {
   const from = Date.parse(start || '');
   const to = Date.parse(end || '');
@@ -382,6 +397,7 @@ module.exports = {
   sanitizeAnsiLine,
   wrapText,
   fmtDuration,
+  fmtBytes,
   durationBetween,
   shortSha,
   statusColor,

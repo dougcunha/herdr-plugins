@@ -4,12 +4,17 @@ const readline = require('node:readline');
 const { truncateAnsi, sanitizeAnsiLine } = require('./format');
 
 class Tui {
-  constructor({ onKey, onResize } = {}) {
+  constructor({ onKey, onClick, onResize } = {}) {
     this.onKey = onKey || (() => {});
+    this.onClick = onClick || (() => {});
     this.onResize = onResize || (() => {});
     this.started = false;
     this.stopped = false;
+    this.mouseEnabled = false;
+    this.mousePending = '';
+    this.mouseSuppress = false;
     this.keypressHandler = null;
+    this.mouseHandler = null;
     this.resizeHandler = null;
     this.exitHandler = null;
   }
@@ -28,8 +33,10 @@ class Tui {
     }
 
     process.stdin.setRawMode(true);
-    process.stdin.resume();
+    this.mouseHandler = (chunk) => this.handleMouseData(chunk);
+    process.stdin.on('data', this.mouseHandler);
     readline.emitKeypressEvents(process.stdin);
+    process.stdin.resume();
 
     this.keypressHandler = (str, key) => this.handleKey(str, key);
     this.resizeHandler = () => this.onResize();
@@ -45,9 +52,56 @@ class Tui {
 
   writeRestore() {
     try {
-      process.stdout.write('\x1b[?25h\x1b[?1049l');
+      process.stdout.write('\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l');
     } catch {
       // The terminal may already be gone.
+    }
+  }
+
+  /**
+   * SGR mouse reporting is enabled only while clickable rows are on screen,
+   * so native selection and scrolling keep working everywhere else.
+   */
+  setMouse(enabled) {
+    if (this.mouseEnabled === enabled) return;
+    this.mouseEnabled = enabled;
+    if (!this.started) return;
+    process.stdout.write(
+      enabled ? '\x1b[?1000h\x1b[?1006h' : '\x1b[?1000l\x1b[?1006l',
+    );
+  }
+
+  handleMouseData(chunk) {
+    const text = `${this.mousePending}${chunk.toString('utf8')}`;
+    this.mousePending = '';
+
+    const pattern = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+    let matched = false;
+    let match;
+    while ((match = pattern.exec(text))) {
+      matched = true;
+      if (match[4] !== 'M') continue;
+
+      const button = Number(match[1]);
+      const x = Number(match[2]);
+      const y = Number(match[3]);
+      if ((button & 64) === 64) {
+        this.onKey({ type: (button & 1) === 1 ? 'down' : 'up' });
+      } else if ((button & 3) === 0) {
+        this.onClick({ type: 'click', x, y });
+      }
+    }
+
+    const partial = /\x1b\[<[0-9;]*$/.exec(text);
+    if (partial) this.mousePending = partial[0];
+
+    if (matched || partial) {
+      // readline parses the same chunk as ordinary keys after this listener
+      // returns; swallow them so a click does not type into a filter.
+      this.mouseSuppress = true;
+      queueMicrotask(() => {
+        this.mouseSuppress = false;
+      });
     }
   }
 
@@ -58,6 +112,9 @@ class Tui {
     if (this.keypressHandler) {
       process.stdin.removeListener('keypress', this.keypressHandler);
     }
+    if (this.mouseHandler) {
+      process.stdin.removeListener('data', this.mouseHandler);
+    }
     if (this.resizeHandler) {
       process.stdout.removeListener('resize', this.resizeHandler);
     }
@@ -66,6 +123,7 @@ class Tui {
     }
 
     if (this.started) {
+      this.setMouse(false);
       try {
         process.stdin.setRawMode(false);
       } catch {
@@ -88,6 +146,8 @@ class Tui {
   }
 
   handleKey(str, key = {}) {
+    if (this.mouseSuppress) return;
+
     if (key.ctrl && key.name === 'c') {
       this.onKey({ type: 'quit' });
       return;

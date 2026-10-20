@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { Gh, GhError, parseGhError } = require('../src/gh');
 
@@ -101,6 +104,82 @@ test('lists jobs across paginated pages', async () => {
 
   const jobs = await gh.listJobs(7);
   assert.deepEqual(jobs.map((job) => job.id), [1, 2, 3]);
+});
+
+test('lists run artifacts across paginated pages', async () => {
+  const capture = {};
+  const gh = ghWithApi(async (path, options) => {
+    capture.path = path;
+    capture.options = options;
+    return {
+      stdout: JSON.stringify([
+        { total_count: 2, artifacts: [{ id: 1 }, { id: 2 }] },
+        { total_count: 3, artifacts: [{ id: 3 }] },
+      ]),
+    };
+  });
+
+  const artifacts = await gh.listArtifacts(7);
+
+  assert.deepEqual(artifacts.map((artifact) => artifact.id), [1, 2, 3]);
+  assert.equal(capture.path, 'repos/herdrdev/herdr/actions/runs/7/artifacts?per_page=100');
+  assert.equal(capture.options.paginate, true);
+  assert.equal(capture.options.slurp, true);
+});
+
+test('downloads an artifact into a per-run directory', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-artifacts-'));
+  const calls = [];
+  try {
+    const gh = new Gh({
+      host: 'github.com',
+      repo: REPO,
+      run: async (args, options) => {
+        calls.push({ args, options });
+        return { stdout: '', stderr: '' };
+      },
+    });
+
+    const result = await gh.downloadArtifact(
+      11,
+      { id: 3, name: 'build logs', expired: false },
+      { dir },
+    );
+
+    assert.deepEqual(calls[0].args, [
+      'run',
+      'download',
+      '11',
+      '--name',
+      'build logs',
+      '--dir',
+      path.join(dir, '.ci-dash', 'artifacts', '11', 'build logs'),
+      '-R',
+      'github.com/herdrdev/herdr',
+    ]);
+    assert.equal(calls[0].options.timeout, 600000);
+    assert.deepEqual(result, {
+      dir: path.join(dir, '.ci-dash', 'artifacts', '11', 'build logs'),
+    });
+    assert.ok(fs.statSync(result.dir).isDirectory());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('refuses to download an expired artifact', async () => {
+  const gh = new Gh({
+    host: 'github.com',
+    repo: REPO,
+    run: async () => {
+      throw new Error('should not run');
+    },
+  });
+
+  await assert.rejects(
+    gh.downloadArtifact(11, { id: 3, name: 'logs', expired: true }),
+    /has expired/,
+  );
 });
 
 test('lists only branches by default', async () => {

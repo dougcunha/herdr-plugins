@@ -116,7 +116,13 @@ herdr plugin unlink ci-dash
 5. **Run** – CI Dash polls the run and shows each job and step until the run
    completes, then sends a Herdr notification with the conclusion. The run
    screen shows an **Open run** button whose click target is the full run URL;
-   press Enter or `o` if the terminal does not support hyperlinks.
+   press Enter or `o` if the terminal does not support hyperlinks. When the
+   build finishes, the artifacts it produced are listed under **Artifacts**.
+   Click an artifact row to download and extract it to
+   `.ci-dash/artifacts/<run-id>/<artifact-name>` under the project directory.
+   Expired artifacts stay listed but cannot be downloaded. Mouse reporting is
+   enabled only while artifact rows are visible, so text selection keeps
+   working everywhere else.
 
 The input types supported by the GitHub API are handled as follows:
 
@@ -210,6 +216,11 @@ npm test
   run is correlated by workflow, ref (for branches), actor, and creation time.
 - While the pane is open, the run is polled with the runs and jobs endpoints,
   at 5-second intervals initially, backing off to 30 seconds for long runs.
+- Once the run completes, artifacts are read from
+  `GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts`. Clicking one
+  runs `gh run download <run-id> --name <name>` into
+  `.ci-dash/artifacts/<run-id>/<artifact-name>` so the checkout is not
+  overwritten.
 
 ## Limitations
 
