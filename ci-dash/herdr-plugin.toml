@@ -1,6 +1,6 @@
 id = "ci-dash"
 name = "CI Dash"
-version = "0.1.1"
+version = "0.2.0"
 min_herdr_version = "0.9.0"
 description = "GitHub Actions in a Herdr pane: dispatch workflows with ref and inputs, watch live."
 platforms = ["linux", "macos", "windows"]
