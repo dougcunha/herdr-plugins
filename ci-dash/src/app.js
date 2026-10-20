@@ -7,6 +7,7 @@ const { parseWorkflowInputs, WorkflowInputError } = require('./workflow-inputs')
 const { Tui } = require('./tui');
 const fmt = require('./format');
 const ui = require('./ui');
+const { version: PLUGIN_VERSION } = require('../package.json');
 
 class UserError extends Error {
   constructor(message, details = '') {
@@ -87,6 +88,8 @@ class App {
     this.pollTimer = null;
     this.clickTargets = new Map();
     this.runClickLines = [];
+    this.hoverY = -1;
+    this.hoverKey = null;
   }
 
   async run() {
@@ -104,6 +107,7 @@ class App {
       this.tui = new Tui({
         onKey: (event) => this.onKey(event),
         onClick: (event) => this.onClick(event),
+        onHover: (event) => this.onHover(event),
         onResize: () => this.render(),
       });
       this.tui.start();
@@ -660,11 +664,12 @@ class App {
         await this.loadArtifacts(watch);
       }
 
+      if (run.status === 'completed') watch.finished = true;
+
       this.updatePaneTitle(run);
       this.render();
 
       if (run.status === 'completed') {
-        watch.finished = true;
         this.notifyCompletion(run);
         return;
       }
@@ -702,10 +707,48 @@ class App {
     watch.artifactsLoaded = true;
   }
 
+  artifactKey(artifact) {
+    return artifact?.id ?? artifact?.name ?? '';
+  }
+
+  targetKey(target) {
+    if (!target) return null;
+    if (target.kind === 'artifact') {
+      return `artifact:${this.artifactKey(target.artifact)}`;
+    }
+    return target.kind;
+  }
+
+  onHover(event) {
+    if (!event || event.type !== 'move') return;
+    const target = this.clickTargets.get(event.y);
+    const key = this.targetKey(target);
+    if (this.hoverY === event.y && this.hoverKey === key) return;
+    this.hoverY = event.y;
+    this.hoverKey = key;
+    if (typeof this.tui?.setPointer === 'function') {
+      this.tui.setPointer(Boolean(target));
+    }
+    this.render();
+  }
+
+  openRun() {
+    const watch = this.watch;
+    if (!watch?.runId) return;
+    this.gh.openRunWeb(watch.runId).catch((error) => {
+      this.message = error.message;
+      this.render();
+    });
+  }
+
   onClick(event) {
     if (!event || event.type !== 'click') return;
-    const artifact = this.clickTargets.get(event.y);
-    if (artifact) this.downloadArtifact(artifact);
+    const target = this.clickTargets.get(event.y);
+    if (target?.kind === 'artifact') {
+      this.downloadArtifact(target.artifact);
+    } else if (target?.kind === 'run') {
+      this.openRun();
+    }
   }
 
   async downloadArtifact(artifact) {
@@ -865,6 +908,11 @@ class App {
   }
 
   onKey(event) {
+    if (this.hoverKey != null) {
+      this.hoverKey = null;
+      this.hoverY = -1;
+      if (typeof this.tui?.setPointer === 'function') this.tui.setPointer(false);
+    }
     if (event.type === 'quit') {
       this.quit();
       return;
@@ -1207,12 +1255,7 @@ class App {
     if (!watch) return;
 
     if (event.type === 'enter') {
-      if (watch.runId) {
-        this.gh.openRunWeb(watch.runId).catch((error) => {
-          this.message = error.message;
-          this.render();
-        });
-      }
+      this.openRun();
       return;
     }
 
@@ -1248,12 +1291,7 @@ class App {
     }
 
     if (event.type === 'char' && event.ch === 'o') {
-      if (watch.runId) {
-        this.gh.openRunWeb(watch.runId).catch((error) => {
-          this.message = error.message;
-          this.render();
-        });
-      }
+      this.openRun();
       return;
     }
     if (event.type === 'char' && event.ch === 'c') {
@@ -1537,7 +1575,11 @@ class App {
   }
 
   footerLines(width) {
-    return ui.hintsLines(this.footerPairs(), width);
+    const lines = ui.hintsLines(this.footerPairs(), width);
+    const label = PLUGIN_VERSION ? `v${PLUGIN_VERSION}` : '';
+    if (!label || width < fmt.visibleLength(label) + 3) return lines;
+    lines.push(fmt.spread('', fmt.style('muted', label), width));
+    return lines;
   }
 
   messageLines(width) {
@@ -1586,13 +1628,19 @@ class App {
       header.length + (steps.length > 0 ? steps.length + 1 : 0) + 1;
     this.clickTargets = new Map();
     if (this.screen === 'run') {
-      for (const { line, artifact } of this.runClickLines) {
+      for (const { line, target } of this.runClickLines) {
         if (line >= available) continue;
         this.clickTargets.set(
           (boxed ? 2 : 1) + bodyStart + line,
-          artifact,
+          target,
         );
       }
+    }
+
+    const hoveredTarget = this.clickTargets.get(this.hoverY);
+    this.hoverKey = this.targetKey(hoveredTarget);
+    if (typeof this.tui.setPointer === 'function') {
+      this.tui.setPointer(Boolean(hoveredTarget));
     }
 
     const inner = [
@@ -2112,12 +2160,18 @@ class App {
           run.html_url,
           fmt.style('accent', `[ ${ui.icon('link')} Open run ]`),
         );
-        header.push(
-          fmt.truncateAnsi(
-            `${button}  ${fmt.style('muted', `Enter ${ui.icon('sep')} o`)}`,
-            width,
-          ),
+        const openLine = fmt.truncateAnsi(
+          `${button}  ${fmt.style('muted', `Enter ${ui.icon('sep')} o`)}`,
+          width,
         );
+        const line = this.hoverKey === 'run'
+          ? ui.row(fmt.stripAnsi(openLine), width, true)
+          : openLine;
+        this.runClickLines.push({
+          line: header.length,
+          target: { kind: 'run' },
+        });
+        header.push(line);
       }
     }
 
@@ -2211,20 +2265,31 @@ class App {
         for (const artifact of watch.artifacts) {
           const expired = Boolean(artifact.expired);
           const size = fmt.fmtBytes(artifact.size_in_bytes);
-          const meta = expired ? 'expired' : size;
+          const meta = expired
+            ? fmt.style('warning', 'expired')
+            : [
+                size ? fmt.style('muted', size) : '',
+                fmt.style('accent', '[ download ]'),
+              ]
+                .filter(Boolean)
+                .join('  ');
           const line = fmt.spread(
-            `${fmt.style(
+            fmt.style(
               expired ? 'muted' : 'info',
               `${ui.icon('download')} ${artifact.name}`,
-            )}`,
-            meta ? fmt.style(expired ? 'warning' : 'muted', meta) : '',
+            ),
+            meta,
             width,
           );
-          content.push(line);
+          const hovered =
+            !expired &&
+            this.hoverKey ===
+              this.targetKey({ kind: 'artifact', artifact });
+          content.push(hovered ? ui.row(fmt.stripAnsi(line), width, true) : line);
           if (!expired) {
             this.runClickLines.push({
               index: content.length - 1,
-              artifact,
+              target: { kind: 'artifact', artifact },
             });
           }
         }
@@ -2246,13 +2311,18 @@ class App {
 
     this.runClickLines = this.runClickLines
       .filter(
-        ({ index }) =>
-          index >= watch.scroll && index < watch.scroll + visibleRows,
+        ({ line, index }) =>
+          line != null ||
+          (index >= watch.scroll && index < watch.scroll + visibleRows),
       )
-      .map(({ index, artifact }) => ({
-        line: header.length + index - watch.scroll,
-        artifact,
-      }));
+      .map((entry) =>
+        entry.line != null
+          ? entry
+          : {
+              line: header.length + entry.index - watch.scroll,
+              target: entry.target,
+            },
+      );
 
     return [...header, ...visible];
   }

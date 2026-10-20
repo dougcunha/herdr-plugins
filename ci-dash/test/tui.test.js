@@ -24,6 +24,21 @@ test('maps the mouse wheel to scrolling keys', () => {
   assert.deepEqual(keys, [{ type: 'up' }, { type: 'down' }]);
 });
 
+test('reports motion without a button as hover', () => {
+  const moves = [];
+  const clicks = [];
+  const tui = new Tui({
+    onHover: (event) => moves.push(event),
+    onClick: (event) => clicks.push(event),
+  });
+
+  tui.handleMouseData(Buffer.from('\x1b[<35;10;5M'));
+  tui.handleMouseData(Buffer.from('\x1b[<32;11;6M'));
+
+  assert.deepEqual(moves, [{ type: 'move', x: 10, y: 5 }]);
+  assert.deepEqual(clicks, []);
+});
+
 test('reassembles a mouse sequence split across chunks', () => {
   const clicks = [];
   const tui = new Tui({ onClick: (event) => clicks.push(event) });

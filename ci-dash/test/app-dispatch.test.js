@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const { App } = require('../src/app');
 const { GhError } = require('../src/gh');
+const fmt = require('../src/format');
 
 delete process.env.HERDR_BIN_PATH;
 delete process.env.HERDR_PANE_ID;
@@ -93,6 +94,57 @@ test('dispatches, then polls the run to its final status', async () => {
   assert.equal(app.watch.artifactsLoaded, true);
 });
 
+test('renders artifacts in the poll that completes the run', async () => {
+  const app = prepare(new App({}));
+  const drawn = [];
+  app.tui = {
+    columns: 100,
+    rows: 40,
+    draw(lines) {
+      drawn.length = 0;
+      drawn.push(...lines);
+    },
+  };
+  app.screen = 'run';
+  app.watch = {
+    runId: 11,
+    run: completedRun({ status: 'in_progress', conclusion: null }),
+    jobs: [],
+    artifacts: [],
+    artifactsLoaded: false,
+    artifactsError: null,
+    downloads: new Set(),
+    tick: 0,
+    notified: false,
+    finished: false,
+    scroll: 0,
+    scrollMax: 0,
+    jobsAt: 0,
+    inFlight: false,
+  };
+  app.gh = {
+    getRun: async () => completedRun(),
+    listJobs: async () => [],
+    listArtifacts: async () => [
+      { id: 3, name: 'build-output', size_in_bytes: 2048, expired: false },
+    ],
+  };
+
+  await app.pollWatch();
+
+  assert.equal(app.watch.finished, true);
+  assert.equal(app.watch.artifacts.length, 1);
+  const rendered = drawn.map((line) => fmt.stripAnsi(line));
+  assert.ok(rendered.some((line) => line.includes('Artifacts')));
+  assert.ok(rendered.some((line) => line.includes('build-output')));
+  assert.ok(rendered.some((line) => line.includes('[ download ]')));
+  assert.ok(
+    Array.from(app.clickTargets.values()).some(
+      (target) => target.kind === 'artifact',
+    ),
+  );
+});
+
 test('downloads an artifact when its row is clicked', async () => {
   const app = prepare(new App({}));
   app.cwd = 'C:/repo';
@@ -121,7 +173,9 @@ test('downloads an artifact when its row is clicked', async () => {
   };
 
   app.render();
-  const row = Array.from(app.clickTargets.keys())[0];
+  const row = Array.from(app.clickTargets.entries()).find(
+    ([, target]) => target.kind === 'artifact',
+  )[0];
   assert.ok(row, 'expected a clickable artifact row');
 
   app.onClick({ type: 'click', y: row });

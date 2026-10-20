@@ -118,8 +118,10 @@ herdr plugin unlink ci-dash
    screen shows an **Open run** button whose click target is the full run URL;
    press Enter or `o` if the terminal does not support hyperlinks. When the
    build finishes, the artifacts it produced are listed under **Artifacts**.
-   Click an artifact row to download and extract it to
-   `.ci-dash/artifacts/<run-id>/<artifact-name>` under the project directory.
+   Click the `[ download ]` button on a row (the whole row is clickable) to
+   download and extract it to `.ci-dash/artifacts/<run-id>/<artifact-name>`
+   under the project directory. Rows highlight under the mouse, and terminals
+   that support OSC 22 switch to a pointing-hand cursor over them.
    Expired artifacts stay listed but cannot be downloaded. Mouse reporting is
    enabled only while artifact rows are visible, so text selection keeps
    working everywhere else.

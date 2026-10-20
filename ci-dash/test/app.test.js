@@ -340,6 +340,17 @@ test('run footer labels b as a new run and offers Esc only after completion', ()
   assert.ok(done.footerPairs().some(([key, label]) => key === 'Esc' && label === 'back'));
 });
 
+test('shows the plugin version in the footer', () => {
+  const app = appOnRun('completed');
+  const version = require('../package.json').version;
+
+  const lines = app.footerLines(80).map((line) => fmt.stripAnsi(line).trimEnd());
+  assert.ok(lines.some((line) => line.endsWith(`v${version}`)));
+
+  const narrow = app.footerLines(4).map((line) => fmt.stripAnsi(line));
+  assert.ok(!narrow.some((line) => line.includes(`v${version}`)));
+});
+
 test('lists artifacts only after the run completes', () => {
   const app = appOnRun('completed');
   app.watch.artifacts = [
@@ -360,6 +371,46 @@ test('lists artifacts only after the run completes', () => {
   ];
   const during = running.runBody(80, 40).map((line) => fmt.stripAnsi(line));
   assert.ok(!during.some((line) => line.includes('Artifacts')));
+});
+
+test('highlights the artifact row under the mouse', () => {
+  const app = appOnRun('completed');
+  app.watch.artifacts = [
+    { id: 7, name: 'build-output', size_in_bytes: 2048, expired: false },
+  ];
+  const pointers = [];
+  app.tui.setPointer = (value) => pointers.push(value);
+
+  app.render();
+  const row = Array.from(app.clickTargets.keys())[0];
+
+  app.onHover({ type: 'move', y: row });
+
+  assert.equal(app.hoverKey, 'artifact:7');
+  assert.equal(pointers[pointers.length - 1], true);
+
+  app.onHover({ type: 'move', y: 1 });
+  assert.equal(app.hoverKey, null);
+  assert.equal(pointers[pointers.length - 1], false);
+});
+
+test('opens the run when the Open run row is clicked', () => {
+  const app = appOnRun('completed');
+  app.watch.run.html_url = 'https://github.com/o/r/actions/runs/123';
+  let opened = null;
+  app.gh = {
+    openRunWeb: async (runId) => {
+      opened = runId;
+    },
+  };
+
+  app.render();
+  const row = Array.from(app.clickTargets.entries()).find(
+    ([, target]) => target.kind === 'run',
+  )[0];
+  app.onClick({ type: 'click', y: row });
+
+  assert.equal(opened, 123);
 });
 
 test('marks expired artifacts without making them clickable', () => {

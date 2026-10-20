@@ -4,13 +4,15 @@ const readline = require('node:readline');
 const { truncateAnsi, sanitizeAnsiLine } = require('./format');
 
 class Tui {
-  constructor({ onKey, onClick, onResize } = {}) {
+  constructor({ onKey, onClick, onHover, onResize } = {}) {
     this.onKey = onKey || (() => {});
     this.onClick = onClick || (() => {});
+    this.onHover = onHover || (() => {});
     this.onResize = onResize || (() => {});
     this.started = false;
     this.stopped = false;
     this.mouseEnabled = false;
+    this.pointerSet = false;
     this.mousePending = '';
     this.mouseSuppress = false;
     this.keypressHandler = null;
@@ -52,7 +54,9 @@ class Tui {
 
   writeRestore() {
     try {
-      process.stdout.write('\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l');
+      process.stdout.write(
+        '\x1b]22;default\x1b\\\x1b[?1003l\x1b[?1006l\x1b[?25h\x1b[?1049l',
+      );
     } catch {
       // The terminal may already be gone.
     }
@@ -65,9 +69,24 @@ class Tui {
   setMouse(enabled) {
     if (this.mouseEnabled === enabled) return;
     this.mouseEnabled = enabled;
+    if (!enabled) this.setPointer(false);
     if (!this.started) return;
     process.stdout.write(
-      enabled ? '\x1b[?1000h\x1b[?1006h' : '\x1b[?1000l\x1b[?1006l',
+      enabled ? '\x1b[?1003h\x1b[?1006h' : '\x1b[?1003l\x1b[?1006l',
+    );
+  }
+
+  /**
+   * OSC 22 asks terminals that support it to show a hand over clickable
+   * rows. Elsewhere the hover highlight is the only feedback and the
+   * sequence is ignored.
+   */
+  setPointer(pointer) {
+    if (this.pointerSet === pointer) return;
+    this.pointerSet = pointer;
+    if (!this.started) return;
+    process.stdout.write(
+      pointer ? '\x1b]22;pointer\x1b\\' : '\x1b]22;default\x1b\\',
     );
   }
 
@@ -85,7 +104,9 @@ class Tui {
       const button = Number(match[1]);
       const x = Number(match[2]);
       const y = Number(match[3]);
-      if ((button & 64) === 64) {
+      if ((button & 32) === 32) {
+        if ((button & 3) === 3) this.onHover({ type: 'move', x, y });
+      } else if ((button & 64) === 64) {
         this.onKey({ type: (button & 1) === 1 ? 'down' : 'up' });
       } else if ((button & 3) === 0) {
         this.onClick({ type: 'click', x, y });
