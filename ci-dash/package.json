@@ -1,6 +1,6 @@
 {
   "name": "@dougcunha/ci-dash",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "GitHub Actions in a Herdr pane: dispatch workflows with ref and inputs, watch live.",
   "license": "MIT",
   "type": "commonjs",
