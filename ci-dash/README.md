@@ -179,6 +179,11 @@ any, for every workflow in the repository. Each entry shows the complete
 artifact name, its creation date, and its size. Select a row with the arrow
 keys and press Enter, or click it, to download it to
 `.ci-dash/artifacts/<run-id>/<artifact-name>` under the project directory.
+The `[ ↗ Open folder ]` button, or `o`, opens the folder of the selected
+artifact in the file manager of the operating system (Explorer, Finder, or
+`xdg-open`). If the selected artifact was not downloaded, it opens the folder of
+the last download, and otherwise `.ci-dash/artifacts`. When the panel is too
+narrow for the labels, both buttons show only their icons, `[ ↗ ]` and `[ ⟳ ]`.
 
 Nothing is fetched when the panel opens: the first time the tab is selected it
 loads on demand, and afterwards only the `[ ⟳ Refresh ]` button or `r` fetch
@@ -210,7 +215,7 @@ The input types supported by the GitHub API are handled as follows:
 | `/`              | Filter workflows or refs.                           |
 | `Ctrl+D`         | Review inputs, then dispatch from the review page.  |
 | `r`              | Reload the current data, the run, or the artifacts tab. |
-| `o`              | Open the run in the browser (same as `Enter` there). |
+| `o`              | Open the run in the browser (same as `Enter` there); on the artifacts tab, open the download folder. |
 | `c`              | Cancel the run.                                     |
 | `R`              | Rerun the run with the same inputs.                 |
 | `b`              | Go back, or start another workflow from the run screen. |

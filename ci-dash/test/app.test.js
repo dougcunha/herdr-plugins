@@ -2,6 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const { App } = require('../src/app');
 const fmt = require('../src/format');
@@ -603,6 +606,99 @@ test('artifacts load on first open and the refresh button reloads them', async (
   app.onClick({ type: 'click', ...findClickTarget(app, 'refresh') });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls, 2);
+});
+
+test('the folder button opens the artifacts download folder', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-'));
+  const dir = path.join(cwd, '.ci-dash', 'artifacts');
+  fs.mkdirSync(dir, { recursive: true });
+  const app = appWithArtifacts();
+  const opened = [];
+  app.cwd = cwd;
+  app.openPath = async (target) => {
+    opened.push(target);
+  };
+
+  await app.openTab('artifacts');
+  app.onClick({ type: 'click', ...findClickTarget(app, 'folder') });
+  await new Promise((resolve) => setImmediate(resolve));
+  app.keyArtifacts({ type: 'char', ch: 'o' });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(opened, [dir, dir]);
+  assert.equal(app.message, `Opened ${dir}`);
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test('the folder button opens the folder of the selected artifact once downloaded', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-'));
+  const root = path.join(cwd, '.ci-dash', 'artifacts');
+  const second = path.join(root, '10', 'second.zip');
+  fs.mkdirSync(second, { recursive: true });
+  const app = artifactsTabApp();
+  const opened = [];
+  app.cwd = cwd;
+  app.openPath = async (target) => {
+    opened.push(target);
+  };
+  app.artifactTab.loaded = true;
+  app.artifactTab.groups = [
+    artifactGroup([
+      artifactFixture({ id: 100, name: 'first.zip' }),
+      artifactFixture({ id: 102, name: 'second.zip' }),
+    ]),
+  ];
+  app.render();
+
+  // The first artifact was not downloaded, so the root opens.
+  await app.openArtifactsFolder();
+  app.keyArtifacts({ type: 'down' });
+  await app.openArtifactsFolder();
+  // A download from another run is the fallback for an artifact not on disk.
+  app.lastDownloadDir = second;
+  app.keyArtifacts({ type: 'up' });
+  await app.openArtifactsFolder();
+
+  assert.deepEqual(opened, [root, second, second]);
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test('the folder button reports when nothing was downloaded yet', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-dash-'));
+  const app = appWithArtifacts();
+  let opened = 0;
+  app.cwd = cwd;
+  app.openPath = async () => {
+    opened += 1;
+  };
+
+  await app.openArtifactsFolder();
+
+  assert.equal(opened, 0);
+  assert.match(app.message, /No artifacts downloaded yet/);
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+test('the tab bar shows icon buttons when the labeled buttons do not fit', async () => {
+  const app = appWithArtifacts();
+  await app.openTab('artifacts');
+  const bar = (width) => {
+    const { lines, spans } = app.tabLines(width);
+    return {
+      text: fmt.stripAnsi(lines[0]),
+      kinds: spans.map((span) => span.target.kind).filter((kind) => kind !== 'tab'),
+    };
+  };
+
+  const wide = bar(80);
+  const narrow = bar(40);
+
+  assert.deepEqual(wide.kinds, ['folder', 'refresh']);
+  assert.ok(wide.text.includes('Open folder'));
+  assert.deepEqual(narrow.kinds, ['folder', 'refresh']);
+  assert.ok(!narrow.text.includes('Open folder'));
+  assert.ok(!narrow.text.includes('Refresh'));
+  assert.equal(fmt.visibleLength(narrow.text), 40);
 });
 
 test('artifacts tab reports a failed load and offers a retry', async () => {

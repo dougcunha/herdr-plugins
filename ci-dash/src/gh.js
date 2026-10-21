@@ -120,6 +120,14 @@ function safeArtifactDir(name) {
   return cleaned || 'artifact';
 }
 
+function artifactsDir(dir) {
+  return path.resolve(dir || process.cwd(), '.ci-dash', 'artifacts');
+}
+
+function artifactDir(dir, runId, name) {
+  return path.join(artifactsDir(dir), String(runId), safeArtifactDir(name));
+}
+
 class Gh {
   constructor({ host, repo, run = runGh }) {
     this.host = host || 'github.com';
@@ -337,14 +345,7 @@ class Gh {
       throw new GhError(`Artifact "${name}" has expired and can no longer be downloaded.`);
     }
 
-    const root = path.resolve(dir || process.cwd());
-    const target = path.join(
-      root,
-      '.ci-dash',
-      'artifacts',
-      String(runId),
-      safeArtifactDir(name),
-    );
+    const target = artifactDir(dir, runId, name);
     fs.mkdirSync(target, { recursive: true });
 
     await this.run(
@@ -418,6 +419,8 @@ function ghErrorHint(error) {
 }
 
 module.exports = {
+  artifactDir,
+  artifactsDir,
   Gh,
   GhError,
   ghErrorHint,

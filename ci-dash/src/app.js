@@ -1,8 +1,9 @@
 'use strict';
 
-const { execFile } = require('node:child_process');
+const fs = require('node:fs');
+const { execFile, spawn } = require('node:child_process');
 const { resolveRepo } = require('./git');
-const { Gh, GhError, ghErrorHint } = require('./gh');
+const { artifactDir, artifactsDir, Gh, GhError, ghErrorHint } = require('./gh');
 const { parseWorkflowInputs, WorkflowInputError } = require('./workflow-inputs');
 const { Tui } = require('./tui');
 const fmt = require('./format');
@@ -52,11 +53,32 @@ async function mapLimit(items, limit, mapper) {
   return results;
 }
 
+/**
+ * Opens a directory in the file manager of the operating system.
+ */
+function openFolder(dir) {
+  const [command, args] =
+    process.platform === 'win32'
+      ? ['explorer.exe', [dir]]
+      : process.platform === 'darwin'
+        ? ['open', [dir]]
+        : ['xdg-open', [dir]];
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
 class App {
-  constructor({ cwd, quick = false, diagnose = false } = {}) {
+  constructor({ cwd, quick = false, diagnose = false, openPath = openFolder } = {}) {
     this.cwd = cwd || process.cwd();
     this.quick = quick;
     this.diagnose = diagnose;
+    this.openPath = openPath;
 
     this.tui = null;
     this.screen = 'loading';
@@ -108,6 +130,7 @@ class App {
       targets: [],
     };
     this.downloads = new Set();
+    this.lastDownloadDir = '';
     this.clickTargets = new Map();
     this.clickLines = [];
     this.hoverY = -1;
@@ -841,6 +864,8 @@ class App {
       this.openTab(target.tab);
     } else if (target.kind === 'refresh') {
       this.loadArtifactTab();
+    } else if (target.kind === 'folder') {
+      this.openArtifactsFolder();
     }
   }
 
@@ -877,6 +902,7 @@ class App {
       const result = await this.gh.downloadArtifact(targetRun, artifact, {
         dir: this.cwd,
       });
+      this.lastDownloadDir = result.dir;
       this.message = `Downloaded ${artifact.name} to ${result.dir}`;
     } catch (error) {
       this.message = `Download failed: ${error.message}`;
@@ -884,6 +910,34 @@ class App {
       this.downloads.delete(key);
       this.render();
     }
+  }
+
+  /**
+   * Opens the folder of the selected artifact when it was downloaded, else the
+   * folder of the last download, else the root of all downloads.
+   */
+  async openArtifactsFolder() {
+    const root = artifactsDir(this.cwd);
+    const selected = this.artifactTab.targets[this.artifactTab.selected];
+    const candidates = [
+      selected && artifactDir(this.cwd, selected.runId, selected.artifact.name),
+      this.lastDownloadDir,
+      root,
+    ];
+    const dir = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+    if (!dir) {
+      this.message = `No artifacts downloaded yet. They go to ${root}`;
+      this.render();
+      return;
+    }
+
+    try {
+      await this.openPath(dir);
+      this.message = `Opened ${dir}`;
+    } catch (error) {
+      this.message = `Could not open ${dir}: ${error.message}`;
+    }
+    this.render();
   }
 
   updatePaneTitle(run) {
@@ -1477,6 +1531,10 @@ class App {
       this.loadArtifactTab();
       return;
     }
+    if (event.type === 'char' && event.ch === 'o') {
+      this.openArtifactsFolder();
+      return;
+    }
     if (event.type === 'char' && event.ch === 'q') {
       this.quit();
       return;
@@ -1662,16 +1720,43 @@ class App {
     });
 
     if (this.tab === 'artifacts') {
-      const plain = `[ ${ui.icon('refresh')} Refresh ]`;
-      const plainWidth = fmt.visibleLength(plain);
-      const start = width - plainWidth;
-      if (start > column + 1) {
-        const button =
-          this.hoverKey === 'refresh'
-            ? ui.row(plain, plainWidth, true)
-            : fmt.style('accent', plain);
-        spans.push({ start, end: width - 1, target: { kind: 'refresh' } });
-        line = `${fmt.padRight(line, start - 1)} ${button}`;
+      const variants = [
+        [
+          { plain: `[ ${ui.icon('link')} Open folder ]`, kind: 'folder' },
+          { plain: `[ ${ui.icon('refresh')} Refresh ]`, kind: 'refresh' },
+        ],
+        [
+          { plain: `[ ${ui.icon('link')} ]`, kind: 'folder' },
+          { plain: `[ ${ui.icon('refresh')} ]`, kind: 'refresh' },
+        ],
+      ].map((list) =>
+        list.map((button) => ({ ...button, width: fmt.visibleLength(button.plain) })),
+      );
+      const total = (list) =>
+        list.reduce((sum, button) => sum + button.width + 1, 0);
+      // Use the labeled buttons when they fit next to the tabs, else the icons,
+      // and drop icons from the left until the rest fit.
+      let buttons =
+        variants.find((list) => width - total(list) > column) ||
+        variants[variants.length - 1];
+      while (buttons.length > 0 && width - total(buttons) <= column) {
+        buttons = buttons.slice(1);
+      }
+
+      let start = width - total(buttons) + 1;
+      if (buttons.length > 0) line = fmt.padRight(line, start - 1);
+      for (const button of buttons) {
+        const text =
+          this.hoverKey === button.kind
+            ? ui.row(button.plain, button.width, true)
+            : fmt.style('accent', button.plain);
+        spans.push({
+          start,
+          end: start + button.width - 1,
+          target: { kind: button.kind },
+        });
+        line += ` ${text}`;
+        start += button.width + 1;
       }
     }
 
@@ -1719,6 +1804,7 @@ class App {
       const pairs = [
         [ui.icon('updown'), 'select'],
         ['Enter', 'download'],
+        ['o', 'open folder'],
         ['r', 'refresh'],
         ['Tab', 'dispatch'],
         ['q', 'close'],
